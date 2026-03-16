@@ -50,13 +50,13 @@ type TabId = (typeof tabs)[number]["id"];
    ═══════════════════════════════════════════════════════════════ */
 
 /** Main pill travel duration in ms — lower = faster  [300–900] */
-const ANIM_DURATION = 660;
+const ANIM_DURATION = 700;
 
 /** Duration when releasing from drag/longpress [300–700] */
-const RELEASE_DURATION = 540;
+const RELEASE_DURATION = 500;
 
 /** Duration when cancelling (snap back) [250–500] */
-const CANCEL_DURATION  = 460;
+const CANCEL_DURATION  = 400;
 
 /** Peak vertical scale of pill during animation — 1.0 = no scale, 1.4 = 40% taller */
 const PEAK_SY = 1.40;

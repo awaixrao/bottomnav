@@ -46,147 +46,127 @@ const tabs = [
 type TabId = (typeof tabs)[number]["id"];
 
 /* ═══════════════════════════════════════════════════════════════
-   SPEED & FEEL CONTROLS
+   SPEED & FEEL CONTROLS — tweak these to taste
    ═══════════════════════════════════════════════════════════════ */
-const ANIM_DURATION    = 680;
-const RELEASE_DURATION = 420;
-const CANCEL_DURATION  = 340;
-const PEAK_SY          = 1.38;
-const NAV_PEAK_SCALE   = 1.022;
+
+/** Main pill travel duration in ms — lower = faster  [300–900] */
+const ANIM_DURATION = 720;
+
+/** Duration when releasing from drag/longpress [300–700] */
+const RELEASE_DURATION = 440;
+
+/** Duration when cancelling (snap back) [250–500] */
+const CANCEL_DURATION  = 360;
+
+/** Peak vertical scale of pill during animation — 1.0 = no scale, 1.4 = 40% taller */
+const PEAK_SY = 1.40;
+
+/** Nav bar subtle zoom during animation — 1.0 = none, 1.03 = 3% zoom */
+const NAV_PEAK_SCALE = 1.024;
 
 /* ═══════════════════════════════════════════════════════════════
-   SPRING INTEGRATOR  (Runge-Kutta 4)
-   Solves  x'' + 2ζω x' + ω² x = ω²  (target = 1)
-   No clamping, no breakpoints — pure continuous physics.
-   Returns value in [0 .. ~1.05] for under-damped cases.
+   SPRING PHYSICS CORE
+   A damped spring solver — gives the authentic iOS "alive" feel.
+   stiffness: how snappy  (higher = faster snap)  [100–600]
+   damping:   how quickly oscillation dies         [10–40]
    ═══════════════════════════════════════════════════════════════ */
-interface SpringState { x: number; v: number; }
-
-function integrateSpring(
-  state: SpringState,
-  dt: number,
-  stiffness: number,
-  damping: number
-): SpringState {
-  const omega = Math.sqrt(stiffness);
-  const zeta  = damping / (2 * omega);
-  const c     = 2 * zeta * omega;   // damping coefficient
-  const k     = stiffness;          // spring coefficient (target=1 → force = k*(1-x))
-
-  // RK4
-  const deriv = (s: SpringState) => ({ dx: s.v, dv: k * (1 - s.x) - c * s.v });
-  const d1 = deriv(state);
-  const d2 = deriv({ x: state.x + d1.dx * dt/2, v: state.v + d1.dv * dt/2 });
-  const d3 = deriv({ x: state.x + d2.dx * dt/2, v: state.v + d2.dv * dt/2 });
-  const d4 = deriv({ x: state.x + d3.dx * dt,   v: state.v + d3.dv * dt   });
-  return {
-    x: state.x + (dt/6) * (d1.dx + 2*d2.dx + 2*d3.dx + d4.dx),
-    v: state.v + (dt/6) * (d1.dv + 2*d2.dv + 2*d3.dv + d4.dv),
-  };
-}
-
-/** Advance a spring from startX toward 1.0 for `elapsed` seconds, sub-stepping at 4ms */
-function springAt(elapsed: number, stiffness: number, damping: number, startX = 0, startV = 0): number {
-  const subStep = 0.004; // 4ms sub-steps for stability
-  let s: SpringState = { x: startX, v: startV };
-  let t = 0;
-  while (t < elapsed) {
-    const dt = Math.min(subStep, elapsed - t);
-    s = integrateSpring(s, dt, stiffness, damping);
-    t += dt;
+function springEase(t: number, stiffness = 280, damping = 28): number {
+  // Analytical solution of under-damped spring: x(t) = 1 - e^(-ζωt)(cos(ωdt) + ζ/√(1-ζ²)·sin(ωdt))
+  const omega  = Math.sqrt(stiffness);
+  const zeta   = damping / (2 * omega);
+  if (zeta >= 1) {
+    // Over-damped — simple smooth exponential
+    const r = omega * zeta;
+    return 1 - Math.exp(-r * t) * (1 + r * t);
   }
-  return s.x;
+  const omegaD = omega * Math.sqrt(1 - zeta * zeta);
+  const decay  = Math.exp(-zeta * omega * t);
+  return 1 - decay * (Math.cos(omegaD * t) + (zeta / Math.sqrt(1 - zeta * zeta)) * Math.sin(omegaD * t));
 }
 
-/* ── Named spring presets ── */
-// Lead edge: snappy, slight overshoot
-const lead  = (t: number) => springAt(t * 1.10, 310, 25);
-// Trail edge: lazy, stretches the pill
-const trail = (t: number) => springAt(t * 1.10, 145, 20);
-// Pill Y scale: rises fast then settles — fully continuous, no breakpoints
-const pillY = (t: number, startSy = 1) => {
-  // Rise spring: very stiff → reaches PEAK_SY quickly
-  const rise  = springAt(t * 1.20, 480, 18, 0, 0);          // 0→1 progress toward peak
-  // Settle spring: moderate → falls back to 1.0 smoothly
-  const settle = springAt(t * 1.15, 130, 17, 0, 0);         // 0→1 progress back to rest
-  // Blend: rise dominates early, settle takes over — no t breakpoint
-  const blend = Math.min(rise, 1);
-  const peak  = startSy + (PEAK_SY - startSy) * blend;       // startSy → PEAK_SY
-  return peak - (peak - 1) * Math.min(settle * 1.18, 1);     // → 1.0
-};
-// Nav zoom: same shape as pillY, softer magnitude
-const navScale = (t: number) => {
-  const rise   = springAt(t * 1.20, 480, 18, 0, 0);
-  const settle = springAt(t * 1.15, 130, 17, 0, 0);
-  const blend  = Math.min(rise, 1);
-  const peak   = 1 + (NAV_PEAK_SCALE - 1) * blend;
-  return peak - (peak - 1) * Math.min(settle * 1.18, 1);
-};
-// Shimmer: smooth ease-in-out
-const shimmerCurve = (t: number) => t < 0.5 ? 2*t*t : 1 - Math.pow(-2*t+2,2)/2;
+/** Lead edge uses a snappier spring — arrives fast, slight overshoot */
+function leadSpring(t: number): number {
+  // stiffness=320 damping=26 → quick but slightly springy
+  const raw = springEase(t * 1.15, 320, 26);
+  return Math.min(raw, 1);
+}
+
+/** Trail edge uses a lazier spring — stretches behind, catches up */
+function trailSpring(t: number): number {
+  // stiffness=160 damping=22 → slower, creates the elongation
+  const raw = springEase(t * 1.15, 160, 22);
+  return Math.min(raw, 1);
+}
+
+/** Pill vertical scale — quick inflate, smooth settle  */
+function pillYCurveFresh(t: number): number {
+  // Rise: spring up to PEAK quickly
+  // Fall: smooth exponential decay back to 1
+  if (t < 0.22) {
+    const p = springEase(t / 0.22, 400, 24);
+    return 1 + (PEAK_SY - 1) * p;
+  }
+  // Decay: from PEAK back to 1 using a smooth spring settle
+  const p = springEase((t - 0.22) / 0.78, 120, 18);
+  return PEAK_SY - (PEAK_SY - 1) * p;
+}
+
+/** Release curve: from current drag sy → 1, smooth, no blink */
+function pillYCurveRelease(t: number, startSy: number): number {
+  // Uses a fast spring to settle from startSy to 1
+  const p = springEase(t, 200, 22);
+  const clamped = Math.min(p, 1);
+  return startSy + (1 - startSy) * clamped;
+}
+
+/** Nav bar zoom curve — subtle lift then settle */
+function navScaleCurve(t: number): number {
+  if (t < 0.20) {
+    const p = springEase(t / 0.20, 350, 26);
+    return 1 + (NAV_PEAK_SCALE - 1) * p;
+  }
+  const p = springEase((t - 0.20) / 0.80, 100, 16);
+  return NAV_PEAK_SCALE - (NAV_PEAK_SCALE - 1) * p;
+}
 
 /* ── Helpers ── */
 function overlapToScaleY(r: number): number {
-  if (r <= 0)    return 1;
-  if (r < 0.4)  { const p = r / 0.4;          return 1 - 0.22 * p * p; }
-  if (r < 0.72) { const p = (r-0.4) / 0.32;   return 0.78 + 0.38*(1-Math.pow(1-p,1.8)); }
-  const p = (r-0.72) / 0.28; return 1.16 - 0.16*(1-Math.pow(1-p,2));
+  if (r <= 0) return 1;
+  if (r < 0.4)  { const p = r / 0.4;           return 1 - 0.22 * p * p; }
+  if (r < 0.72) { const p = (r - 0.4) / 0.32;  return 0.78 + 0.38 * (1 - Math.pow(1 - p, 1.8)); }
+  const p = (r - 0.72) / 0.28; return 1.16 - 0.16 * (1 - Math.pow(1 - p, 2));
 }
 const scaleYtoX = (sy: number) => 1 + (1 - sy) * 0.18;
+
 function overlapRatio(pL: number, pW: number, tL: number, tW: number): number {
-  const inter = Math.max(0, Math.min(pL+pW, tL+tW) - Math.max(pL, tL));
+  const inter = Math.max(0, Math.min(pL + pW, tL + tW) - Math.max(pL, tL));
   return Math.min(inter / tW, 1);
 }
 
 type IconTf = { sy: number; sx: number };
 const DEFAULT_TF: IconTf = { sy: 1, sx: 1 };
-
-/* Single render-state object — one setState per frame, zero tearing */
-interface FrameState {
-  pillLeft:  number;
-  pillWidth: number;
-  pillSy:    number;
-  pillSx:    number;
-  shimmer:   number;
-  navScale:  number;
-  active:    TabId;
-  iconTf:    Record<string, IconTf>;
-}
-
+interface PillState { left: number; width: number; sy: number; sx: number; shimmer: number; }
 interface DragRef {
-  startX:    number;
-  startCX:   number;
-  pointerId: number;
-  tapped:    TabId | null;
-  mode:      "pending" | "drag" | "longpress";
-  nearest:   TabId;
-  done:      boolean;
-  timer:     ReturnType<typeof setTimeout>;
+  startX: number; startCX: number; pointerId: number;
+  tapped: TabId | null; mode: "pending" | "drag" | "longpress";
+  nearest: TabId; done: boolean; timer: ReturnType<typeof setTimeout>;
 }
 
 export default function BottomNav() {
-  const initState: FrameState = {
-    pillLeft: 0, pillWidth: 0,
-    pillSy: 1, pillSx: 1,
-    shimmer: 0, navScale: 1,
-    active: "home",
-    iconTf: { home: DEFAULT_TF, dms: DEFAULT_TF, activity: DEFAULT_TF, more: DEFAULT_TF },
-  };
-
-  const [frame, setFrame] = useState<FrameState>(initState);
+  const [active,   setActive]   = useState<TabId>("home");
+  const [pill,     setPill]     = useState<PillState>({ left: 0, width: 0, sy: 1, sx: 1, shimmer: 0 });
+  const [navScale, setNavScale] = useState(1);
+  const [iconTf,   setIconTf]   = useState<Record<string, IconTf>>({
+    home: DEFAULT_TF, dms: DEFAULT_TF, activity: DEFAULT_TF, more: DEFAULT_TF,
+  });
 
   const tabRefs      = useRef<Record<string, HTMLButtonElement | null>>({});
   const containerRef = useRef<HTMLDivElement>(null);
   const animRaf      = useRef(0);
-  const frameRef     = useRef<FrameState>(initState);   // shadow for reads inside RAF
+  const shimRaf      = useRef(0);
+  const pillRef      = useRef<PillState>({ left: 0, width: 0, sy: 1, sx: 1, shimmer: 0 });
   const activeRef    = useRef<TabId>("home");
   const dragRef      = useRef<DragRef | null>(null);
-
-  /** Single commit: write to both shadow-ref and React state */
-  const commit = useCallback((patch: Partial<FrameState>) => {
-    frameRef.current = { ...frameRef.current, ...patch };
-    setFrame(prev => ({ ...prev, ...patch }));
-  }, []);
 
   const getRect = useCallback((id: string) => {
     const el = tabRefs.current[id], cnt = containerRef.current;
@@ -201,103 +181,102 @@ export default function BottomNav() {
     return r;
   }, [getRect]);
 
-  /* ─────────────────────────────────────────────────────────────
-     Core animation loop
-     Uses normalised time t ∈ [0,1] over `dur` ms.
-     startSy: pill's actual sy when animation fires (for drag→release continuity).
-  ───────────────────────────────────────────────────────────── */
+  const setPillDirect = useCallback((p: Partial<PillState>) => {
+    pillRef.current = { ...pillRef.current, ...p };
+    setPill(prev => ({ ...prev, ...p }));
+  }, []);
+
+  /* Shimmer fade */
+  const animShimmer = useCallback((from: number, to: number, dur: number) => {
+    cancelAnimationFrame(shimRaf.current);
+    const t0 = performance.now();
+    const tick = (now: number) => {
+      const p = Math.min((now - t0) / dur, 1);
+      const e = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
+      setPillDirect({ shimmer: from + (to - from) * e });
+      if (p < 1) shimRaf.current = requestAnimationFrame(tick);
+    };
+    shimRaf.current = requestAnimationFrame(tick);
+  }, [setPillDirect]);
+
+  /* ── Core animation loop ──────────────────────────────────────
+     dur:     total ms  ← controlled by ANIM_DURATION / RELEASE_DURATION
+     startSy: pill's sy at animation start (to avoid snap-blink on release)
+  ────────────────────────────────────────────────────────────── */
   const runAnim = useCallback((
     sL: number, sW: number,
     eL: number, eW: number,
     targetId: TabId,
-    dur: number,
+    dur: number,           // ← SPEED CONTROLLER passed in from call-site
     startSy = 1,
     onDone?: () => void
   ) => {
+    const rects    = allRects();
+    const goRight  = eL >= sL;
     cancelAnimationFrame(animRaf.current);
-    const rects   = allRects();
-    const goRight = eL >= sL;
-    let t0 = -1;
+    animShimmer(0, 1, 180);
+    const t0 = performance.now();
+    const isRelease = startSy > 1.05;
     let shimFaded = false;
 
     const tick = (now: number) => {
-      if (t0 < 0) t0 = now;
-      const elapsed = now - t0;                         // ms
-      const t       = Math.min(elapsed / dur, 1);       // 0→1
-      const tSec    = elapsed / 1000;                   // seconds for spring integrator
+      /* ── t is normalised 0→1 over `dur` ms ── */
+      const t = Math.min((now - t0) / dur, 1);
 
-      /* ── Pill horizontal ── */
+      /* ── Pill horizontal position — spring-based lead/trail ── */
       let l: number, w: number;
       if (goRight) {
-        const rEdge = (sL+sW) + ((eL+eW)-(sL+sW)) * Math.min(lead(tSec),  1);
-        l           =  sL     + (eL-sL)             * Math.min(trail(tSec), 1);
+        const rEdge = (sL + sW) + ((eL + eW) - (sL + sW)) * leadSpring(t);
+        l = sL + (eL - sL) * trailSpring(t);
         w = rEdge - l;
       } else {
-        l           =  sL     + (eL-sL)             * Math.min(lead(tSec),  1);
-        const rEdge = (sL+sW) + ((eL+eW)-(sL+sW))  * Math.min(trail(tSec), 1);
+        l = sL + (eL - sL) * leadSpring(t);
+        const rEdge = (sL + sW) + ((eL + eW) - (sL + sW)) * trailSpring(t);
         w = rEdge - l;
       }
       w = Math.max(w, Math.min(sW, eW) * 0.68);
 
-      /* ── Pill vertical scale — continuous spring, no jump ── */
-      const sy  = pillY(tSec, startSy);
-      const sx  = 1 + (sy - 1) * 0.28;
+      /* ── Pill vertical scale ── */
+      const sy = isRelease ? pillYCurveRelease(t, startSy) : pillYCurveFresh(t);
+      const sx = 1 + (sy - 1) * 0.28;
+      setPillDirect({ left: l, width: w, sy, sx });
 
-      /* ── Nav zoom — mirrors pillY shape, smaller magnitude ── */
-      const ns  = navScale(tSec);
+      /* ── Nav bar zoom ── */
+      setNavScale(navScaleCurve(t));
 
-      /* ── Shimmer ── */
-      const shimIn  = shimmerCurve(Math.min(t / 0.18, 1));
-      const shimOut = t >= 0.55 ? shimmerCurve(Math.min((t-0.55)/0.45, 1)) : 0;
-      const shim    = shimIn * (1 - shimOut);
-
-      /* ── Icon squeeze — batch with same setFrame ── */
-      const iconTf: Record<string, IconTf> = {};
+      /* ── Icon squeeze ── */
+      const newTf: Record<string, IconTf> = {};
       tabs.forEach(tb => {
         const r = rects[tb.id];
-        if (!r) { iconTf[tb.id] = DEFAULT_TF; return; }
+        if (!r) { newTf[tb.id] = DEFAULT_TF; return; }
         const ratio = overlapRatio(l, w, r.left, r.width);
         if (tb.id === targetId) {
-          const s = overlapToScaleY(ratio); iconTf[tb.id] = { sy: s, sx: scaleYtoX(s) };
+          const s = overlapToScaleY(ratio); newTf[tb.id] = { sy: s, sx: scaleYtoX(s) };
         } else if (ratio > 0.02) {
-          iconTf[tb.id] = { sy: 1-ratio*0.09, sx: scaleYtoX(1-ratio*0.09) };
+          newTf[tb.id] = { sy: 1 - ratio * 0.09, sx: scaleYtoX(1 - ratio * 0.09) };
         } else {
-          iconTf[tb.id] = DEFAULT_TF;
+          newTf[tb.id] = DEFAULT_TF;
         }
       });
+      setIconTf({ ...newTf });
 
-      /* ── Single commit per frame — no tearing ── */
-      const patch: Partial<FrameState> = {
-        pillLeft: l, pillWidth: w,
-        pillSy: sy, pillSx: sx,
-        shimmer: shim,
-        navScale: ns,
-        iconTf,
-      };
-      frameRef.current = { ...frameRef.current, ...patch };
-      setFrame(prev => ({ ...prev, ...patch }));
-
-      if (!shimFaded && t >= 0.55) shimFaded = true;
+      /* Shimmer fade-out at 60% progress */
+      if (!shimFaded && t >= 0.60) { shimFaded = true; animShimmer(1, 0, 280); }
 
       if (t < 1) {
         animRaf.current = requestAnimationFrame(tick);
       } else {
-        /* Hard-land: exact rest position, all scales = 1 */
+        /* Hard-land on exact tab position — pill never rests off-center */
+        setPillDirect({ left: eL, width: eW, sy: 1, sx: 1, shimmer: 0 });
+        setNavScale(1);
         const final: Record<string, IconTf> = {};
         tabs.forEach(tb => { final[tb.id] = DEFAULT_TF; });
-        const rest: Partial<FrameState> = {
-          pillLeft: eL, pillWidth: eW,
-          pillSy: 1, pillSx: 1,
-          shimmer: 0, navScale: 1,
-          iconTf: final,
-        };
-        frameRef.current = { ...frameRef.current, ...rest };
-        setFrame(prev => ({ ...prev, ...rest }));
+        setIconTf(final);
         onDone?.();
       }
     };
     animRaf.current = requestAnimationFrame(tick);
-  }, [allRects]);
+  }, [allRects, animShimmer, setPillDirect]);
 
   /* Normal tap */
   const goToTab = useCallback((id: TabId) => {
@@ -305,15 +284,18 @@ export default function BottomNav() {
     const from = getRect(activeRef.current), to = getRect(id);
     if (!from || !to) return;
     activeRef.current = id;
-    commit({ active: id });
-    runAnim(from.left, from.width, to.left, to.width, id, ANIM_DURATION, 1);
-  }, [getRect, commit, runAnim]);
+    setActive(id);
+    runAnim(from.left, from.width, to.left, to.width, id,
+      ANIM_DURATION, // ← change ANIM_DURATION constant at top to adjust tap speed
+      1
+    );
+  }, [getRect, runAnim]);
 
-  /* Init pill position */
+  /* Init */
   useEffect(() => {
     const r = getRect("home");
-    if (r) commit({ pillLeft: r.left, pillWidth: r.width });
-  }, [getRect, commit]);
+    if (r) setPillDirect({ left: r.left, width: r.width });
+  }, [getRect, setPillDirect]);
 
   /* ── Pointer handlers ── */
   const handlePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
@@ -331,7 +313,8 @@ export default function BottomNav() {
       const d = dragRef.current;
       if (!d || d.done) return;
       d.mode = "longpress";
-      commit({ pillSy: PEAK_SY, pillSx: 1+(PEAK_SY-1)*0.28, navScale: NAV_PEAK_SCALE });
+      setPillDirect({ sy: PEAK_SY, sx: 1 + (PEAK_SY - 1) * 0.28 });
+      setNavScale(NAV_PEAK_SCALE);
       try { containerRef.current?.setPointerCapture(d.pointerId); } catch (_) {}
     }, 200);
 
@@ -341,7 +324,7 @@ export default function BottomNav() {
       done: false, timer,
     };
     e.preventDefault();
-  }, [getRect, commit]);
+  }, [getRect, setPillDirect]);
 
   const handlePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     const d = dragRef.current;
@@ -353,35 +336,34 @@ export default function BottomNav() {
     if (d.mode === "pending" && Math.abs(dx) > 6) {
       clearTimeout(d.timer);
       d.mode = "drag";
-      commit({ pillSy: PEAK_SY, pillSx: 1+(PEAK_SY-1)*0.28, navScale: NAV_PEAK_SCALE });
+      setPillDirect({ sy: PEAK_SY, sx: 1 + (PEAK_SY - 1) * 0.28 });
+      setNavScale(NAV_PEAK_SCALE);
       try { containerRef.current?.setPointerCapture(d.pointerId); } catch (_) {}
     }
     if (d.mode !== "drag" && d.mode !== "longpress") return;
 
     cancelAnimationFrame(animRaf.current);
+    cancelAnimationFrame(shimRaf.current);
 
     let nearest: TabId = d.nearest, nearestDist = Infinity;
     tabs.forEach(({ id }) => {
       const r = getRect(id); if (!r) return;
-      const dist = Math.abs(x - (r.left + r.width/2));
+      const dist = Math.abs(x - (r.left + r.width / 2));
       if (dist < nearestDist) { nearestDist = dist; nearest = id; }
     });
     d.nearest = nearest;
 
     const tr = getRect(nearest); if (!tr) return;
     const maxL = nb.width - 12 - tr.width;
-    const newL = Math.max(0, Math.min(x - tr.width/2, maxL));
+    const newL = Math.max(0, Math.min(x - tr.width / 2, maxL));
+    setPillDirect({ left: newL, width: tr.width, sy: PEAK_SY, sx: 1 + (PEAK_SY - 1) * 0.28, shimmer: 0.22 });
+    setNavScale(NAV_PEAK_SCALE);
 
-    const iconTf: Record<string, IconTf> = {};
-    tabs.forEach(({ id }) => { iconTf[id] = DEFAULT_TF; });
-
-    commit({
-      pillLeft: newL, pillWidth: tr.width,
-      pillSy: PEAK_SY, pillSx: 1+(PEAK_SY-1)*0.28,
-      shimmer: 0.22, navScale: NAV_PEAK_SCALE,
-      active: nearest, iconTf,
-    });
-  }, [getRect, commit]);
+    const newTf: Record<string, IconTf> = {};
+    tabs.forEach(({ id }) => { newTf[id] = DEFAULT_TF; });
+    setIconTf(newTf);
+    setActive(nearest);
+  }, [getRect, setPillDirect]);
 
   const handlePointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     const d = dragRef.current;
@@ -392,19 +374,23 @@ export default function BottomNav() {
     const dx = e.clientX - d.startCX;
 
     if (d.mode === "drag" || d.mode === "longpress") {
-      const { pillLeft: sL, pillWidth: sW, pillSy: curSy } = frameRef.current;
+      const { left: sL, width: sW, sy: curSy } = pillRef.current;
       const to = getRect(d.nearest);
-      if (!to) { commit({ pillSy: 1, pillSx: 1, navScale: 1 }); return; }
+      if (!to) { setPillDirect({ sy: 1, sx: 1 }); setNavScale(1); return; }
       activeRef.current = d.nearest;
-      commit({ active: d.nearest });
-      runAnim(sL, sW, to.left, to.width, d.nearest, RELEASE_DURATION, curSy);
+      setActive(d.nearest);
+      runAnim(sL, sW, to.left, to.width, d.nearest,
+        RELEASE_DURATION, // ← change RELEASE_DURATION constant at top to adjust release speed
+        curSy
+      );
     } else if (Math.abs(dx) < 8 && d.tapped) {
       goToTab(d.tapped);
     } else {
       const to = getRect(activeRef.current);
-      if (to) commit({ pillLeft: to.left, pillWidth: to.width, pillSy: 1, pillSx: 1, navScale: 1 });
+      if (to) setPillDirect({ left: to.left, width: to.width, sy: 1, sx: 1 });
+      setNavScale(1);
     }
-  }, [getRect, commit, runAnim, goToTab]);
+  }, [getRect, setPillDirect, runAnim, goToTab]);
 
   const handlePointerCancel = useCallback(() => {
     const d = dragRef.current;
@@ -413,33 +399,39 @@ export default function BottomNav() {
     d.done = true;
     dragRef.current = null;
     const to = getRect(activeRef.current);
-    const { pillLeft: sL, pillWidth: sW, pillSy: curSy } = frameRef.current;
-    if (to) runAnim(sL, sW, to.left, to.width, activeRef.current, CANCEL_DURATION, curSy);
-    else commit({ pillSy: 1, pillSx: 1, navScale: 1 });
-  }, [getRect, commit, runAnim]);
+    const { left: sL, width: sW, sy: curSy } = pillRef.current;
+    if (to) runAnim(sL, sW, to.left, to.width, activeRef.current,
+      CANCEL_DURATION, // ← change CANCEL_DURATION constant at top to adjust cancel snap speed
+      curSy
+    );
+    else { setPillDirect({ sy: 1, sx: 1 }); setNavScale(1); }
+  }, [getRect, setPillDirect, runAnim]);
 
-  useEffect(() => () => { cancelAnimationFrame(animRaf.current); }, []);
+  useEffect(() => () => {
+    cancelAnimationFrame(animRaf.current);
+    cancelAnimationFrame(shimRaf.current);
+  }, []);
 
-  /* ── Pill render ── */
-  const s = frame.shimmer;
-  const pillBg     = `rgba(255,255,255,${0.18 + s*0.08})`;
+  /* Pill render styles */
+  const s = pill.shimmer;
+  const pillBg = `rgba(255,255,255,${0.18 + s * 0.08})`;
   const pillShadow = [
-    `inset 0 1px 0 rgba(255,255,255,${0.55+s*0.35})`,
-    `inset 0 -1px 0 rgba(255,255,255,${0.08+s*0.10})`,
-    `inset 1px 0 0 rgba(255,255,255,${0.12+s*0.15})`,
-    `inset -1px 0 0 rgba(255,255,255,${0.10+s*0.10})`,
-    `0 8px 32px rgba(0,0,0,${0.28+s*0.12})`,
+    `inset 0 1px 0 rgba(255,255,255,${0.55 + s * 0.35})`,
+    `inset 0 -1px 0 rgba(255,255,255,${0.08 + s * 0.10})`,
+    `inset 1px 0 0 rgba(255,255,255,${0.12 + s * 0.15})`,
+    `inset -1px 0 0 rgba(255,255,255,${0.10 + s * 0.10})`,
+    `0 8px 32px rgba(0,0,0,${0.28 + s * 0.12})`,
     `0 2px 8px rgba(0,0,0,0.20)`,
   ].join(",");
 
   return (
     <div style={{
-      minHeight:"100vh",
-      background:"linear-gradient(145deg,#0d0d1a 0%,#0a1628 30%,#12082a 60%,#0d1520 100%)",
-      display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"flex-end",
-      fontFamily:"'SF Pro Display',-apple-system,BlinkMacSystemFont,sans-serif",
-      paddingBottom:48, userSelect:"none", WebkitUserSelect:"none",
-      position:"relative", overflow:"hidden",
+      minHeight: "100vh",
+      background: "linear-gradient(145deg,#0d0d1a 0%,#0a1628 30%,#12082a 60%,#0d1520 100%)",
+      display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end",
+      fontFamily: "'SF Pro Display',-apple-system,BlinkMacSystemFont,sans-serif",
+      paddingBottom: 48, userSelect: "none", WebkitUserSelect: "none",
+      position: "relative", overflow: "hidden",
     }}>
       {/* Bokeh */}
       <div style={{ position:"absolute",inset:0,pointerEvents:"none",zIndex:0 }}>
@@ -459,8 +451,8 @@ export default function BottomNav() {
         {tabs.map(t => (
           <div key={t.id} style={{
             position:"absolute",display:"flex",flexDirection:"column",alignItems:"center",gap:12,
-            opacity: frame.active === t.id ? 1 : 0,
-            transform: frame.active === t.id ? "translateY(0) scale(1)" : "translateY(16px) scale(0.95)",
+            opacity: active === t.id ? 1 : 0,
+            transform: active === t.id ? "translateY(0) scale(1)" : "translateY(16px) scale(0.95)",
             transition:"opacity 0.40s ease, transform 0.50s cubic-bezier(0.34,1.4,0.64,1)",
             pointerEvents:"none",
           }}>
@@ -491,8 +483,8 @@ export default function BottomNav() {
             ].join(","),
             border:".5px solid rgba(255,255,255,.14)",
             touchAction:"none", cursor:"pointer",
-            overflow:"visible",
-            transform:`scale(${frame.navScale})`,
+            overflow:"visible",                     // pill can burst outside
+            transform:`scale(${navScale})`,          // subtle whole-nav zoom
             transformOrigin:"center bottom",
             willChange:"transform",
           }}
@@ -501,17 +493,17 @@ export default function BottomNav() {
           onPointerUp={handlePointerUp}
           onPointerCancel={handlePointerCancel}
         >
-          {/* Sliding pill */}
+          {/* ── Sliding pill ── */}
           <div style={{
             position:"absolute", top:5, bottom:5,
-            left: frame.pillLeft, width: frame.pillWidth,
+            left: pill.left, width: pill.width,
             borderRadius:100,
             background: pillBg,
             backdropFilter:"blur(20px) saturate(200%)",
             WebkitBackdropFilter:"blur(20px) saturate(200%)",
             boxShadow: pillShadow,
-            border:`0.5px solid rgba(255,255,255,${0.20+s*0.15})`,
-            transform:`scaleY(${frame.pillSy}) scaleX(${frame.pillSx})`,
+            border:`0.5px solid rgba(255,255,255,${0.20 + s * 0.15})`,
+            transform:`scaleY(${pill.sy}) scaleX(${pill.sx})`,
             transformOrigin:"center center",
             willChange:"left,width,transform",
             overflow:"hidden", pointerEvents:"none",
@@ -523,8 +515,8 @@ export default function BottomNav() {
 
           {/* Tab buttons */}
           {tabs.map(tab => {
-            const isActive = frame.active === tab.id;
-            const tf = frame.iconTf[tab.id] ?? DEFAULT_TF;
+            const isActive = active === tab.id;
+            const tf = iconTf[tab.id] ?? DEFAULT_TF;
             return (
               <button key={tab.id} ref={el => { tabRefs.current[tab.id] = el; }} style={{
                 position:"relative",zIndex:1,

@@ -185,7 +185,7 @@ export default function BottomNav() {
 
   const handlePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button > 0) return;
-    if (dragRef.current?.isSearchDrag) return; // BLOCK NAV IF SEARCH DRAGGING
+    if (dragRef.current?.isSearchDrag) return;
     const nb = containerRef.current!.getBoundingClientRect();
     const x = e.clientX - nb.left;
     let tapped: TabId | null = null;
@@ -301,30 +301,25 @@ export default function BottomNav() {
     }
     if (d.mode !== "drag" && d.mode !== "longpress") return;
     
-    // Minimal drag movement
     const moveX = dx * 0.05;
     const moveY = dy * 0.05;
     
     const distance = Math.sqrt(dx * dx + dy * dy);
-    const maxStretch = 100; // More sensitive
+    const maxStretch = 100;
     const stretchRatio = Math.min(distance / maxStretch, SEARCH_STRETCH_MAX);
     const absDx = Math.abs(dx);
     const absDy = Math.abs(dy);
     
     let scaleX = 1, scaleY = 1, skewX = 0, skewY = 0;
-    const stretchAmount = (stretchRatio - 1) * 0.5; // INCREASED stretch visibility
+    const stretchAmount = (stretchRatio - 1) * 0.5;
     
     if (absDy > absDx) {
-      // VERTICAL drag - more stretch
-      scaleY = 1 + stretchAmount * 0.8; // Vertical expansion
-      scaleX = 1 - stretchAmount * 0.2; // Horizontal compression
-      // Skew to deform top/bottom
+      scaleY = 1 + stretchAmount * 0.8;
+      scaleX = 1 - stretchAmount * 0.2;
       skewY = dy > 0 ? stretchAmount * 6 : -stretchAmount * 6;
     } else {
-      // HORIZONTAL drag - more stretch
-      scaleX = 1 + stretchAmount * 0.8; // Horizontal expansion
-      scaleY = 1 - stretchAmount * 0.2; // Vertical compression
-      // Skew to deform left/right
+      scaleX = 1 + stretchAmount * 0.8;
+      scaleY = 1 - stretchAmount * 0.2;
       skewX = dx > 0 ? stretchAmount * 6 : -stretchAmount * 6;
     }
     

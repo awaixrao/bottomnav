@@ -16,7 +16,7 @@ const tabs = [
 
 type TabId = (typeof tabs)[number]["id"];
 
-const ANIM_DURATION = 820, RELEASE_DURATION = 440, CANCEL_DURATION = 360, PEAK_SY = 1.4, NAV_PEAK_SCALE = 1.024, SEARCH_PEAK_SCALE = 1.2, SEARCH_STRETCH_MAX = 1.3;
+const ANIM_DURATION = 820, RELEASE_DURATION = 440, CANCEL_DURATION = 360, PEAK_SY = 1.4, NAV_PEAK_SCALE = 1.024, SEARCH_PEAK_SCALE = 1.2;
 
 function springEase(t: number, stiffness = 280, damping = 28): number {
   const omega = Math.sqrt(stiffness), zeta = damping / (2 * omega);
@@ -37,15 +37,15 @@ const overlapRatio = (pL: number, pW: number, tL: number, tW: number) => Math.mi
 type IconTf = { sy: number; sx: number };
 const DEFAULT_TF: IconTf = { sy: 1, sx: 1 };
 interface PillState { left: number; width: number; sy: number; sx: number; shimmer: number; }
-interface SearchButtonState { scale: number; scaleX: number; scaleY: number; translateX?: number; translateY?: number; skewX?: number; skewY?: number; }
-interface DragRef { startX: number; startCX: number; pointerId: number; tapped: TabId | null; mode: "pending" | "drag" | "longpress"; nearest: TabId; done: boolean; timer: ReturnType<typeof setTimeout>; isSearchDrag?: boolean; dragX?: number; dragY?: number; }
+interface SearchButtonState { scaleX: number; scaleY: number; translateX: number; translateY: number; }
+interface DragRef { startX: number; startY: number; startCX: number; startCY: number; pointerId: number; tapped: TabId | null; mode: "pending" | "drag" | "longpress"; nearest: TabId; done: boolean; timer: ReturnType<typeof setTimeout>; isSearchDrag?: boolean; }
 
 export default function BottomNav() {
   const [active, setActive] = useState<TabId>("home");
   const [pill, setPill] = useState<PillState>({ left: 0, width: 0, sy: 1, sx: 1, shimmer: 0 });
   const [navScale, setNavScale] = useState(1);
   const [iconTf, setIconTf] = useState<Record<string, IconTf>>({ home: DEFAULT_TF, dms: DEFAULT_TF, activity: DEFAULT_TF, more: DEFAULT_TF });
-  const [searchBtn, setSearchBtn] = useState<SearchButtonState>({ scale: 1, scaleX: 1, scaleY: 1, translateX: 0, translateY: 0, skewX: 0, skewY: 0 });
+  const [searchBtn, setSearchBtn] = useState<SearchButtonState>({ scaleX: 1, scaleY: 1, translateX: 0, translateY: 0 });
 
   const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const containerRef = useRef<HTMLDivElement>(null);
@@ -54,6 +54,8 @@ export default function BottomNav() {
   const pillRef = useRef<PillState>({ left: 0, width: 0, sy: 1, sx: 1, shimmer: 0 });
   const activeRef = useRef<TabId>("home");
   const dragRef = useRef<DragRef | null>(null);
+  // Track current search btn state for animation start values
+  const searchBtnRef2 = useRef<SearchButtonState>({ scaleX: 1, scaleY: 1, translateX: 0, translateY: 0 });
 
   const getRect = useCallback((id: string) => {
     const el = tabRefs.current[id], cnt = containerRef.current;
@@ -74,6 +76,7 @@ export default function BottomNav() {
   }, []);
 
   const setSearchBtnDirect = useCallback((s: Partial<SearchButtonState>) => {
+    searchBtnRef2.current = { ...searchBtnRef2.current, ...s };
     setSearchBtn((prev) => ({ ...prev, ...s }));
   }, []);
 
@@ -89,30 +92,23 @@ export default function BottomNav() {
     shimRaf.current = requestAnimationFrame(tick);
   }, [setPillDirect]);
 
-  const animSearchReturn = useCallback((fromScale: number, fromScaleX: number, fromScaleY: number, dur: number) => {
+  const animSearchReturn = useCallback((fromState: SearchButtonState, dur: number) => {
     cancelAnimationFrame(searchAnimRaf.current);
     const t0 = performance.now();
-    const fromTranslateX = searchBtn.translateX || 0;
-    const fromTranslateY = searchBtn.translateY || 0;
-    const fromSkewX = searchBtn.skewX || 0;
-    const fromSkewY = searchBtn.skewY || 0;
-    
     const tick = (now: number) => {
       const t = Math.min((now - t0) / dur, 1);
       const p = Math.min(springEase(t, 240, 24), 1);
-      setSearchBtnDirect({
-        scale: fromScale + (1 - fromScale) * p,
-        scaleX: fromScaleX + (1 - fromScaleX) * p,
-        scaleY: fromScaleY + (1 - fromScaleY) * p,
-        translateX: fromTranslateX + (0 - fromTranslateX) * p,
-        translateY: fromTranslateY + (0 - fromTranslateY) * p,
-        skewX: fromSkewX + (0 - fromSkewX) * p,
-        skewY: fromSkewY + (0 - fromSkewY) * p,
-      });
+      const next: SearchButtonState = {
+        scaleX: fromState.scaleX + (1 - fromState.scaleX) * p,
+        scaleY: fromState.scaleY + (1 - fromState.scaleY) * p,
+        translateX: fromState.translateX + (0 - fromState.translateX) * p,
+        translateY: fromState.translateY + (0 - fromState.translateY) * p,
+      };
+      setSearchBtnDirect(next);
       if (p < 1) searchAnimRaf.current = requestAnimationFrame(tick);
     };
     searchAnimRaf.current = requestAnimationFrame(tick);
-  }, [searchBtn.translateX, searchBtn.translateY, searchBtn.skewX, searchBtn.skewY]);
+  }, [setSearchBtnDirect]);
 
   const runAnim = useCallback((sL: number, sW: number, eL: number, eW: number, targetId: TabId, dur: number, startSy = 1, onDone?: () => void) => {
     const rects = allRects();
@@ -198,7 +194,7 @@ export default function BottomNav() {
       setNavScale(NAV_PEAK_SCALE);
       try { containerRef.current?.setPointerCapture(d.pointerId); } catch (_) {}
     }, 200);
-    dragRef.current = { startX: x, startCX: e.clientX, pointerId: e.pointerId, tapped, mode: "pending", nearest: tapped ?? activeRef.current, done: false, timer, isSearchDrag: false };
+    dragRef.current = { startX: x, startY: e.clientY, startCX: e.clientX, startCY: e.clientY, pointerId: e.pointerId, tapped, mode: "pending", nearest: tapped ?? activeRef.current, done: false, timer, isSearchDrag: false };
     e.preventDefault();
   }, [getRect, setPillDirect]);
 
@@ -273,17 +269,25 @@ export default function BottomNav() {
     else { setPillDirect({ sy: 1, sx: 1 }); setNavScale(1); }
   }, [getRect, setPillDirect, runAnim]);
 
+  // ─── Search button handlers (FIXED: clean oval stretch along drag axis) ───
+
   const handleSearchPointerDown = useCallback((e: React.PointerEvent<HTMLButtonElement>) => {
     if (e.button > 0) return;
+    cancelAnimationFrame(searchAnimRaf.current);
     const timer = setTimeout(() => {
       const d = dragRef.current;
       if (!d || d.done) return;
       d.mode = "longpress";
       d.isSearchDrag = true;
-      setSearchBtnDirect({ scale: SEARCH_PEAK_SCALE });
       try { searchBtnRef.current?.setPointerCapture(e.pointerId); } catch (_) {}
     }, 200);
-    dragRef.current = { startX: e.clientX, startCX: e.clientX, pointerId: e.pointerId, tapped: null, mode: "pending", nearest: "home", done: false, timer, dragX: 0, dragY: 0, isSearchDrag: false };
+    dragRef.current = {
+      startX: e.clientX, startY: e.clientY,
+      startCX: e.clientX, startCY: e.clientY,
+      pointerId: e.pointerId, tapped: null,
+      mode: "pending", nearest: "home",
+      done: false, timer, isSearchDrag: false,
+    };
     e.preventDefault();
   }, []);
 
@@ -291,72 +295,66 @@ export default function BottomNav() {
     const d = dragRef.current;
     if (!d || d.done) return;
     const dx = e.clientX - d.startCX;
-    const dy = e.clientY - d.startCX;
-    if (d.mode === "pending" && (Math.abs(dx) > 6 || Math.abs(dy) > 6)) {
+    const dy = e.clientY - d.startCY;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    if (d.mode === "pending" && dist > 6) {
       clearTimeout(d.timer);
       d.mode = "drag";
       d.isSearchDrag = true;
-      setSearchBtnDirect({ scale: SEARCH_PEAK_SCALE });
-      try { searchBtnRef.current?.setPointerCapture(e.pointerId); } catch (_) {}
+      try { searchBtnRef.current?.setPointerCapture(d.pointerId); } catch (_) {}
     }
     if (d.mode !== "drag" && d.mode !== "longpress") return;
-    
-    const moveX = dx * 0.05;
-    const moveY = dy * 0.05;
-    
-    const distance = Math.sqrt(dx * dx + dy * dy);
-    const maxStretch = 100;
-    const stretchRatio = Math.min(distance / maxStretch, SEARCH_STRETCH_MAX);
+
+    // Subtle follow movement
+    const tx = dx * 0.04;
+    const ty = dy * 0.04;
+
+    // Oval stretch: elongate along dominant drag axis, compress the other
+    const maxDist = 120;
+    const stretchFactor = Math.min(dist / maxDist, 1);
+  const longAxis = 1 + 0.28 * stretchFactor;   // max ~1.28x — subtle elongation
+const shortAxis = 1 - 0.10 * stretchFactor;  // max ~0.90x — gentle compression
+
     const absDx = Math.abs(dx);
     const absDy = Math.abs(dy);
-    
-    let scaleX = 1, scaleY = 1, skewX = 0, skewY = 0;
-    const stretchAmount = (stretchRatio - 1) * 0.5;
-    
-    if (absDy > absDx) {
-      scaleY = 1 + stretchAmount * 0.8;
-      scaleX = 1 - stretchAmount * 0.2;
-      skewY = dy > 0 ? stretchAmount * 6 : -stretchAmount * 6;
-    } else {
-      scaleX = 1 + stretchAmount * 0.8;
-      scaleY = 1 - stretchAmount * 0.2;
-      skewX = dx > 0 ? stretchAmount * 6 : -stretchAmount * 6;
-    }
-    
-    setSearchBtnDirect({ scale: SEARCH_PEAK_SCALE, scaleX, scaleY, translateX: moveX, translateY: moveY, skewX, skewY });
-    d.dragX = dx;
-    d.dragY = dy;
-  }, []);
+    const scaleX = absDx >= absDy ? longAxis : shortAxis;
+    const scaleY = absDy > absDx ? longAxis : shortAxis;
+
+    setSearchBtnDirect({ scaleX, scaleY, translateX: tx, translateY: ty });
+  }, [setSearchBtnDirect]);
 
   const handleSearchPointerUp = useCallback((e: React.PointerEvent<HTMLButtonElement>) => {
     const d = dragRef.current;
     if (!d) return;
     clearTimeout(d.timer);
     const dx = e.clientX - d.startCX;
-    const isClick = Math.abs(dx) < 8 && d.mode === "pending";
-    if (isClick) {
-      setSearchBtnDirect({ scale: 1.2 });
-      setTimeout(() => { setSearchBtnDirect({ scale: 1, scaleX: 1, scaleY: 1, translateX: 0, translateY: 0, skewX: 0, skewY: 0 }); }, 220);
-    } else if (d.mode === "drag" || d.mode === "longpress") {
-      const currentState = searchBtn;
-      animSearchReturn(currentState.scale, currentState.scaleX, currentState.scaleY, RELEASE_DURATION);
-    } else {
-      setSearchBtnDirect({ scale: 1, scaleX: 1, scaleY: 1, translateX: 0, translateY: 0, skewX: 0, skewY: 0 });
-    }
+    const dy = e.clientY - d.startCY;
+    const isClick = Math.sqrt(dx * dx + dy * dy) < 8 && d.mode === "pending";
     d.done = true;
     dragRef.current = null;
-  }, [animSearchReturn, searchBtn]);
+
+    if (isClick) {
+      // Tap: quick bounce scale then return
+      setSearchBtnDirect({ scaleX: SEARCH_PEAK_SCALE, scaleY: SEARCH_PEAK_SCALE, translateX: 0, translateY: 0 });
+      setTimeout(() => {
+        animSearchReturn({ scaleX: SEARCH_PEAK_SCALE, scaleY: SEARCH_PEAK_SCALE, translateX: 0, translateY: 0 }, 220);
+      }, 0);
+    } else if (d.mode === "drag" || d.mode === "longpress") {
+      animSearchReturn({ ...searchBtnRef2.current }, RELEASE_DURATION);
+    } else {
+      setSearchBtnDirect({ scaleX: 1, scaleY: 1, translateX: 0, translateY: 0 });
+    }
+  }, [animSearchReturn, setSearchBtnDirect]);
 
   const handleSearchPointerCancel = useCallback(() => {
     const d = dragRef.current;
     if (!d) return;
     clearTimeout(d.timer);
     d.done = true;
-    const currentState = searchBtn;
-    animSearchReturn(currentState.scale, currentState.scaleX, currentState.scaleY, CANCEL_DURATION);
-    setSearchBtnDirect({ translateX: 0, translateY: 0, skewX: 0, skewY: 0 });
     dragRef.current = null;
-  }, [searchBtn, animSearchReturn]);
+    animSearchReturn({ ...searchBtnRef2.current }, CANCEL_DURATION);
+  }, [animSearchReturn]);
 
   useEffect(() => () => {
     cancelAnimationFrame(animRaf.current);
@@ -366,7 +364,17 @@ export default function BottomNav() {
 
   const s = pill.shimmer;
   const pillBg = `rgba(255,255,255,${0.07 + s * 0.04})`;
-  const pillShadow = [`inset 0 1px 0 rgba(255,255,255,${0.22 + s * 0.18})`, `inset 0 -1px 0 rgba(255,255,255,${0.04 + s * 0.05})`, `inset 1px 0 0 rgba(255,255,255,${0.06 + s * 0.07})`, `inset -1px 0 0 rgba(255,255,255,${0.05 + s * 0.06})`, `0 8px 32px rgba(0,0,0,${0.4 + s * 0.15})`, `0 2px 8px rgba(0,0,0,0.28)`].join(",");
+  const pillShadow = [
+    `inset 0 1px 0 rgba(255,255,255,${0.22 + s * 0.18})`,
+    `inset 0 -1px 0 rgba(255,255,255,${0.04 + s * 0.05})`,
+    `inset 1px 0 0 rgba(255,255,255,${0.06 + s * 0.07})`,
+    `inset -1px 0 0 rgba(255,255,255,${0.05 + s * 0.06})`,
+    `0 8px 32px rgba(0,0,0,${0.4 + s * 0.15})`,
+    `0 2px 8px rgba(0,0,0,0.28)`,
+  ].join(",");
+
+  // Search button transform — pure scaleX/scaleY for clean oval, no skew
+  const searchTransform = `translate(${searchBtn.translateX}px, ${searchBtn.translateY}px) scaleX(${searchBtn.scaleX}) scaleY(${searchBtn.scaleY})`;
 
   return (
     <div style={{ minHeight: "100vh", background: "linear-gradient(145deg,#0d0d1a 0%,#0a1628 30%,#12082a 60%,#0d1520 100%)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", fontFamily: "'SF Pro Display',-apple-system,BlinkMacSystemFont,sans-serif", paddingBottom: 48, userSelect: "none", WebkitUserSelect: "none", position: "relative", overflow: "hidden" }}>
@@ -381,11 +389,24 @@ export default function BottomNav() {
       <p style={{ position: "absolute", bottom: 130, left: 0, right: 0, textAlign: "center", fontSize: 12, color: "rgba(255,255,255,.25)", letterSpacing: ".3px", pointerEvents: "none", zIndex: 1 }}>tap · drag · long-press &amp; drag</p>
 
       <div style={{ flex: 1, position: "relative", zIndex: 1, width: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
-        {tabs.map((t) => (<div key={t.id} style={{ position: "absolute", display: "flex", flexDirection: "column", alignItems: "center", gap: 12, opacity: active === t.id ? 1 : 0, transform: active === t.id ? "translateY(0) scale(1)" : "translateY(16px) scale(0.95)", transition: "opacity 0.40s ease, transform 0.50s cubic-bezier(0.34,1.4,0.64,1)", pointerEvents: "none" }}><div style={{ fontSize: 62, lineHeight: 1, filter: "drop-shadow(0 8px 30px rgba(100,100,255,0.4))" }}>{t.emoji}</div><p style={{ fontSize: 28, fontWeight: 600, color: "rgba(255,255,255,.92)", margin: 0, letterSpacing: "-.5px", textShadow: "0 2px 12px rgba(0,0,0,.4)" }}>{t.label}</p><p style={{ fontSize: 14, color: "rgba(255,255,255,.45)", margin: 0 }}>{t.sub}</p></div>))}
+        {tabs.map((t) => (
+          <div key={t.id} style={{ position: "absolute", display: "flex", flexDirection: "column", alignItems: "center", gap: 12, opacity: active === t.id ? 1 : 0, transform: active === t.id ? "translateY(0) scale(1)" : "translateY(16px) scale(0.95)", transition: "opacity 0.40s ease, transform 0.50s cubic-bezier(0.34,1.4,0.64,1)", pointerEvents: "none" }}>
+            <div style={{ fontSize: 62, lineHeight: 1, filter: "drop-shadow(0 8px 30px rgba(100,100,255,0.4))" }}>{t.emoji}</div>
+            <p style={{ fontSize: 28, fontWeight: 600, color: "rgba(255,255,255,.92)", margin: 0, letterSpacing: "-.5px", textShadow: "0 2px 12px rgba(0,0,0,.4)" }}>{t.label}</p>
+            <p style={{ fontSize: 14, color: "rgba(255,255,255,.45)", margin: 0 }}>{t.sub}</p>
+          </div>
+        ))}
       </div>
 
       <div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", gap: 10, padding: "0 6px" }}>
-        <div ref={containerRef} style={{ position: "relative", display: "flex", alignItems: "center", background: "rgba(255,255,255,.10)", backdropFilter: "blur(40px) saturate(180%)", WebkitBackdropFilter: "blur(40px) saturate(180%)", borderRadius: 100, padding: "5px 6px", boxShadow: ["inset 0 1px 0 rgba(255,255,255,.30)", "inset 0 -1px 0 rgba(255,255,255,.04)", "inset 1px 0 0 rgba(255,255,255,.08)", "inset -1px 0 0 rgba(255,255,255,.06)", "0 20px 60px rgba(0,0,0,.45)", "0 4px 16px rgba(0,0,0,.30)"].join(","), border: ".5px solid rgba(255,255,255,.14)", touchAction: "none", cursor: "pointer", overflow: "visible", WebkitTapHighlightColor: "transparent", outline: "none", transform: `scale(${navScale})`, transformOrigin: "center bottom", willChange: "transform" }} onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp} onPointerCancel={handlePointerCancel}>
+        <div
+          ref={containerRef}
+          style={{ position: "relative", display: "flex", alignItems: "center", background: "rgba(255,255,255,.10)", backdropFilter: "blur(40px) saturate(180%)", WebkitBackdropFilter: "blur(40px) saturate(180%)", borderRadius: 100, padding: "5px 6px", boxShadow: ["inset 0 1px 0 rgba(255,255,255,.30)", "inset 0 -1px 0 rgba(255,255,255,.04)", "inset 1px 0 0 rgba(255,255,255,.08)", "inset -1px 0 0 rgba(255,255,255,.06)", "0 20px 60px rgba(0,0,0,.45)", "0 4px 16px rgba(0,0,0,.30)"].join(","), border: ".5px solid rgba(255,255,255,.14)", touchAction: "none", cursor: "pointer", overflow: "visible", WebkitTapHighlightColor: "transparent", outline: "none", transform: `scale(${navScale})`, transformOrigin: "center bottom", willChange: "transform" }}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onPointerCancel={handlePointerCancel}
+        >
           <div style={{ position: "absolute", top: 5, bottom: 5, left: pill.left, width: pill.width, borderRadius: 100, background: pillBg, backdropFilter: "blur(20px) saturate(200%)", WebkitBackdropFilter: "blur(20px) saturate(200%)", boxShadow: pillShadow, border: `0.5px solid rgba(255,255,255,${0.2 + s * 0.15})`, transform: `scaleY(${pill.sy}) scaleX(${pill.sx})`, transformOrigin: "center center", willChange: "left,width,transform", overflow: "hidden", pointerEvents: "none" }}>
             <div style={{ position: "absolute", top: 0, left: "8%", right: "8%", height: 1.5, borderRadius: 10, background: `rgba(255,255,255,${0.28 + s * 0.18})` }} />
             <div style={{ position: "absolute", inset: 0, background: `radial-gradient(ellipse at 50% 0%,rgba(255,255,255,${0.05 + s * 0.05}) 0%,transparent 70%)` }} />
@@ -393,12 +414,50 @@ export default function BottomNav() {
           </div>
           {tabs.map((tab) => {
             const isActive = active === tab.id;
-            const tf = DEFAULT_TF;
-            return (<button key={tab.id} ref={(el) => { tabRefs.current[tab.id] = el; }} style={{ position: "relative", zIndex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 3, padding: "8px 14px", border: "none", background: "transparent", cursor: "pointer", borderRadius: 100, minWidth: 68, color: isActive ? "rgba(255,255,255,.96)" : "rgba(255,255,255,.42)", WebkitTapHighlightColor: "transparent", outline: "none", transition: "color .30s ease", pointerEvents: "none" }}><div style={{ transform: `scaleY(${tf.sy}) scaleX(${tf.sx})`, transformOrigin: "center bottom", willChange: "transform", lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center", filter: isActive ? "drop-shadow(0 0 8px rgba(255,255,255,0.5))" : "none", transition: "filter .30s ease" }}><tab.Icon /></div><span style={{ fontSize: 11, fontWeight: isActive ? 600 : 400, lineHeight: 1, letterSpacing: isActive ? "-.2px" : ".1px", transition: "font-weight .25s, letter-spacing .25s, color .30s ease", display: "inline-block", transform: `scaleX(${tf.sx})`, willChange: "transform" }}>{tab.label}</span></button>);
+            const tf = iconTf[tab.id] ?? DEFAULT_TF;
+            return (
+              <button
+                key={tab.id}
+                ref={(el) => { tabRefs.current[tab.id] = el; }}
+                style={{ position: "relative", zIndex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 3, padding: "8px 14px", border: "none", background: "transparent", cursor: "pointer", borderRadius: 100, minWidth: 68, color: isActive ? "rgba(255,255,255,.96)" : "rgba(255,255,255,.42)", WebkitTapHighlightColor: "transparent", outline: "none", transition: "color .30s ease", pointerEvents: "none" }}
+              >
+                <div style={{ transform: `scaleY(${tf.sy}) scaleX(${tf.sx})`, transformOrigin: "center bottom", willChange: "transform", lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center", filter: isActive ? "drop-shadow(0 0 8px rgba(255,255,255,0.5))" : "none", transition: "filter .30s ease" }}>
+                  <tab.Icon />
+                </div>
+                <span style={{ fontSize: 11, fontWeight: isActive ? 600 : 400, lineHeight: 1, letterSpacing: isActive ? "-.2px" : ".1px", transition: "font-weight .25s, letter-spacing .25s, color .30s ease", display: "inline-block", transform: `scaleX(${tf.sx})`, willChange: "transform" }}>
+                  {tab.label}
+                </span>
+              </button>
+            );
           })}
         </div>
 
-        <button ref={searchBtnRef} style={{ width: 52, height: 52, borderRadius: "50%", background: "rgba(255,255,255,.10)", backdropFilter: "blur(40px) saturate(180%)", WebkitBackdropFilter: "blur(40px) saturate(180%)", boxShadow: ["inset 0 1px 0 rgba(255,255,255,.30)", "inset 0 -1px 0 rgba(255,255,255,.04)", "0 20px 60px rgba(0,0,0,.40)", "0 4px 16px rgba(0,0,0,.28)"].join(","), border: ".5px solid rgba(255,255,255,.14)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: "rgba(255,255,255,.55)", WebkitTapHighlightColor: "transparent", outline: "none", flexShrink: 0, transform: `translate(${searchBtn.translateX || 0}px, ${searchBtn.translateY || 0}px) scale(${searchBtn.scale}) scaleX(${searchBtn.scaleX}) scaleY(${searchBtn.scaleY}) skewX(${searchBtn.skewX || 0}deg) skewY(${searchBtn.skewY || 0}deg)`, transformOrigin: "center center", willChange: "transform", touchAction: "none" }} onPointerDown={handleSearchPointerDown} onPointerMove={handleSearchPointerMove} onPointerUp={handleSearchPointerUp} onPointerCancel={handleSearchPointerCancel}><SearchIcon /></button>
+        <button
+          ref={searchBtnRef}
+          style={{
+            width: 52, height: 52, borderRadius: "50%",
+            background: "rgba(255,255,255,.10)",
+            backdropFilter: "blur(40px) saturate(180%)",
+            WebkitBackdropFilter: "blur(40px) saturate(180%)",
+            boxShadow: ["inset 0 1px 0 rgba(255,255,255,.30)", "inset 0 -1px 0 rgba(255,255,255,.04)", "0 20px 60px rgba(0,0,0,.40)", "0 4px 16px rgba(0,0,0,.28)"].join(","),
+            border: ".5px solid rgba(255,255,255,.14)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            cursor: "pointer", color: "rgba(255,255,255,.55)",
+            WebkitTapHighlightColor: "transparent", outline: "none",
+            flexShrink: 0,
+            // Clean oval: only translate + scaleX/scaleY, no skew
+            transform: searchTransform,
+            transformOrigin: "center center",
+            willChange: "transform",
+            touchAction: "none",
+          }}
+          onPointerDown={handleSearchPointerDown}
+          onPointerMove={handleSearchPointerMove}
+          onPointerUp={handleSearchPointerUp}
+          onPointerCancel={handleSearchPointerCancel}
+        >
+          <SearchIcon />
+        </button>
       </div>
     </div>
   );

@@ -341,7 +341,7 @@ export default function BottomNav() {
     const isClick = Math.abs(dx) < 8 && d.mode === "pending";
     if (isClick) {
       setSearchBtnDirect({ scale: 1.2 });
-      setTimeout(() => { setSearchBtnDirect({ scale: 1, scaleX: 1, scaleY: 1, translateX: 0, translateY: 0, skewX: 0, skewY: 0 }); }, 120);
+      setTimeout(() => { setSearchBtnDirect({ scale: 1, scaleX: 1, scaleY: 1, translateX: 0, translateY: 0, skewX: 0, skewY: 0 }); }, 220);
     } else if (d.mode === "drag" || d.mode === "longpress") {
       const currentState = searchBtn;
       animSearchReturn(currentState.scale, currentState.scaleX, currentState.scaleY, RELEASE_DURATION);

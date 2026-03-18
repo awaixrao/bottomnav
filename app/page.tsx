@@ -37,7 +37,7 @@ const overlapRatio = (pL: number, pW: number, tL: number, tW: number) => Math.mi
 type IconTf = { sy: number; sx: number };
 const DEFAULT_TF: IconTf = { sy: 1, sx: 1 };
 interface PillState { left: number; width: number; sy: number; sx: number; shimmer: number; }
-interface SearchButtonState { scale: number; scaleX: number; scaleY: number; translateX?: number; translateY?: number; }
+interface SearchButtonState { scale: number; scaleX: number; scaleY: number; translateX?: number; translateY?: number; skewX?: number; skewY?: number; }
 interface DragRef { startX: number; startCX: number; pointerId: number; tapped: TabId | null; mode: "pending" | "drag" | "longpress"; nearest: TabId; done: boolean; timer: ReturnType<typeof setTimeout>; isSearchDrag?: boolean; dragX?: number; dragY?: number; }
 
 export default function BottomNav() {
@@ -45,7 +45,7 @@ export default function BottomNav() {
   const [pill, setPill] = useState<PillState>({ left: 0, width: 0, sy: 1, sx: 1, shimmer: 0 });
   const [navScale, setNavScale] = useState(1);
   const [iconTf, setIconTf] = useState<Record<string, IconTf>>({ home: DEFAULT_TF, dms: DEFAULT_TF, activity: DEFAULT_TF, more: DEFAULT_TF });
-  const [searchBtn, setSearchBtn] = useState<SearchButtonState>({ scale: 1, scaleX: 1, scaleY: 1, translateX: 0, translateY: 0 });
+  const [searchBtn, setSearchBtn] = useState<SearchButtonState>({ scale: 1, scaleX: 1, scaleY: 1, translateX: 0, translateY: 0, skewX: 0, skewY: 0 });
 
   const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const containerRef = useRef<HTMLDivElement>(null);
@@ -94,6 +94,8 @@ export default function BottomNav() {
     const t0 = performance.now();
     const fromTranslateX = searchBtn.translateX || 0;
     const fromTranslateY = searchBtn.translateY || 0;
+    const fromSkewX = searchBtn.skewX || 0;
+    const fromSkewY = searchBtn.skewY || 0;
     
     const tick = (now: number) => {
       const t = Math.min((now - t0) / dur, 1);
@@ -104,11 +106,13 @@ export default function BottomNav() {
         scaleY: fromScaleY + (1 - fromScaleY) * p,
         translateX: fromTranslateX + (0 - fromTranslateX) * p,
         translateY: fromTranslateY + (0 - fromTranslateY) * p,
+        skewX: fromSkewX + (0 - fromSkewX) * p,
+        skewY: fromSkewY + (0 - fromSkewY) * p,
       });
       if (p < 1) searchAnimRaf.current = requestAnimationFrame(tick);
     };
     searchAnimRaf.current = requestAnimationFrame(tick);
-  }, [searchBtn.translateX, searchBtn.translateY]);
+  }, [searchBtn.translateX, searchBtn.translateY, searchBtn.skewX, searchBtn.skewY]);
 
   const runAnim = useCallback((sL: number, sW: number, eL: number, eW: number, targetId: TabId, dur: number, startSy = 1, onDone?: () => void) => {
     const rects = allRects();
@@ -297,26 +301,34 @@ export default function BottomNav() {
     }
     if (d.mode !== "drag" && d.mode !== "longpress") return;
     
-    // MINIMAL drag movement - just 10% of finger movement
-    const moveX = dx * 0.03;
-    const moveY = dy * 0.03;
+    // Minimal drag movement
+    const moveX = dx * 0.05;
+    const moveY = dy * 0.05;
     
     const distance = Math.sqrt(dx * dx + dy * dy);
-    const maxStretch = 180;
+    const maxStretch = 100; // More sensitive
     const stretchRatio = Math.min(distance / maxStretch, SEARCH_STRETCH_MAX);
     const absDx = Math.abs(dx);
     const absDy = Math.abs(dy);
-    const isHorizontal = absDx > absDy;
-    let scaleX = 1, scaleY = 1;
-    const stretchAmount = (stretchRatio - 1) * 0.15;
-    if (isHorizontal) {
-      scaleX = 1 + stretchAmount;
-      scaleY = 1 - stretchAmount * 0.05;
+    
+    let scaleX = 1, scaleY = 1, skewX = 0, skewY = 0;
+    const stretchAmount = (stretchRatio - 1) * 0.5; // INCREASED stretch visibility
+    
+    if (absDy > absDx) {
+      // VERTICAL drag - more stretch
+      scaleY = 1 + stretchAmount * 0.8; // Vertical expansion
+      scaleX = 1 - stretchAmount * 0.2; // Horizontal compression
+      // Skew to deform top/bottom
+      skewY = dy > 0 ? stretchAmount * 6 : -stretchAmount * 6;
     } else {
-      scaleY = 1 + stretchAmount;
-      scaleX = 1 - stretchAmount * 0.05;
+      // HORIZONTAL drag - more stretch
+      scaleX = 1 + stretchAmount * 0.8; // Horizontal expansion
+      scaleY = 1 - stretchAmount * 0.2; // Vertical compression
+      // Skew to deform left/right
+      skewX = dx > 0 ? stretchAmount * 6 : -stretchAmount * 6;
     }
-    setSearchBtnDirect({ scale: SEARCH_PEAK_SCALE, scaleX, scaleY, translateX: moveX, translateY: moveY });
+    
+    setSearchBtnDirect({ scale: SEARCH_PEAK_SCALE, scaleX, scaleY, translateX: moveX, translateY: moveY, skewX, skewY });
     d.dragX = dx;
     d.dragY = dy;
   }, []);
@@ -329,12 +341,12 @@ export default function BottomNav() {
     const isClick = Math.abs(dx) < 8 && d.mode === "pending";
     if (isClick) {
       setSearchBtnDirect({ scale: 0.9 });
-      setTimeout(() => { setSearchBtnDirect({ scale: 1, scaleX: 1, scaleY: 1, translateX: 0, translateY: 0 }); }, 120);
+      setTimeout(() => { setSearchBtnDirect({ scale: 1, scaleX: 1, scaleY: 1, translateX: 0, translateY: 0, skewX: 0, skewY: 0 }); }, 120);
     } else if (d.mode === "drag" || d.mode === "longpress") {
       const currentState = searchBtn;
       animSearchReturn(currentState.scale, currentState.scaleX, currentState.scaleY, RELEASE_DURATION);
     } else {
-      setSearchBtnDirect({ scale: 1, scaleX: 1, scaleY: 1, translateX: 0, translateY: 0 });
+      setSearchBtnDirect({ scale: 1, scaleX: 1, scaleY: 1, translateX: 0, translateY: 0, skewX: 0, skewY: 0 });
     }
     d.done = true;
     dragRef.current = null;
@@ -347,7 +359,7 @@ export default function BottomNav() {
     d.done = true;
     const currentState = searchBtn;
     animSearchReturn(currentState.scale, currentState.scaleX, currentState.scaleY, CANCEL_DURATION);
-    setSearchBtnDirect({ translateX: 0, translateY: 0 });
+    setSearchBtnDirect({ translateX: 0, translateY: 0, skewX: 0, skewY: 0 });
     dragRef.current = null;
   }, [searchBtn, animSearchReturn]);
 
@@ -391,7 +403,7 @@ export default function BottomNav() {
           })}
         </div>
 
-        <button ref={searchBtnRef} style={{ width: 52, height: 52, borderRadius: "50%", background: "rgba(255,255,255,.10)", backdropFilter: "blur(40px) saturate(180%)", WebkitBackdropFilter: "blur(40px) saturate(180%)", boxShadow: ["inset 0 1px 0 rgba(255,255,255,.30)", "inset 0 -1px 0 rgba(255,255,255,.04)", "0 20px 60px rgba(0,0,0,.40)", "0 4px 16px rgba(0,0,0,.28)"].join(","), border: ".5px solid rgba(255,255,255,.14)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: "rgba(255,255,255,.55)", WebkitTapHighlightColor: "transparent", outline: "none", flexShrink: 0, transform: `translate(${searchBtn.translateX || 0}px, ${searchBtn.translateY || 0}px) scale(${searchBtn.scale}) scaleX(${searchBtn.scaleX}) scaleY(${searchBtn.scaleY})`, transformOrigin: "center center", willChange: "transform", touchAction: "none" }} onPointerDown={handleSearchPointerDown} onPointerMove={handleSearchPointerMove} onPointerUp={handleSearchPointerUp} onPointerCancel={handleSearchPointerCancel}><SearchIcon /></button>
+        <button ref={searchBtnRef} style={{ width: 52, height: 52, borderRadius: "50%", background: "rgba(255,255,255,.10)", backdropFilter: "blur(40px) saturate(180%)", WebkitBackdropFilter: "blur(40px) saturate(180%)", boxShadow: ["inset 0 1px 0 rgba(255,255,255,.30)", "inset 0 -1px 0 rgba(255,255,255,.04)", "0 20px 60px rgba(0,0,0,.40)", "0 4px 16px rgba(0,0,0,.28)"].join(","), border: ".5px solid rgba(255,255,255,.14)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: "rgba(255,255,255,.55)", WebkitTapHighlightColor: "transparent", outline: "none", flexShrink: 0, transform: `translate(${searchBtn.translateX || 0}px, ${searchBtn.translateY || 0}px) scale(${searchBtn.scale}) scaleX(${searchBtn.scaleX}) scaleY(${searchBtn.scaleY}) skewX(${searchBtn.skewX || 0}deg) skewY(${searchBtn.skewY || 0}deg)`, transformOrigin: "center center", willChange: "transform", touchAction: "none" }} onPointerDown={handleSearchPointerDown} onPointerMove={handleSearchPointerMove} onPointerUp={handleSearchPointerUp} onPointerCancel={handleSearchPointerCancel}><SearchIcon /></button>
       </div>
     </div>
   );

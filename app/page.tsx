@@ -1,8 +1,6 @@
 "use client";
-
 import { useState, useRef, useEffect, useCallback } from "react";
 
-/* ── Icons ── */
 const HomeIcon = () => (
   <svg
     width="24"
@@ -11,8 +9,6 @@ const HomeIcon = () => (
     fill="none"
     stroke="currentColor"
     strokeWidth="1.8"
-    strokeLinecap="round"
-    strokeLinejoin="round"
   >
     <path d="M3 9.5L12 3l9 6.5V20a1 1 0 01-1 1H4a1 1 0 01-1-1V9.5z" />
     <path d="M9 21V12h6v9" />
@@ -27,8 +23,6 @@ const DMsIcon = () => (
     fill="none"
     stroke="currentColor"
     strokeWidth="1.8"
-    strokeLinecap="round"
-    strokeLinejoin="round"
   >
     <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
     <circle cx="9" cy="10" r="1" fill="currentColor" stroke="none" />
@@ -43,8 +37,6 @@ const ActivityIcon = () => (
     fill="none"
     stroke="currentColor"
     strokeWidth="1.8"
-    strokeLinecap="round"
-    strokeLinejoin="round"
   >
     <path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9" />
     <path d="M13.73 21a2 2 0 01-3.46 0" />
@@ -58,8 +50,6 @@ const MoreIcon = () => (
     fill="none"
     stroke="currentColor"
     strokeWidth="1.8"
-    strokeLinecap="round"
-    strokeLinejoin="round"
   >
     <circle cx="5" cy="12" r="1.5" fill="currentColor" stroke="none" />
     <circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none" />
@@ -74,8 +64,6 @@ const SearchIcon = () => (
     fill="none"
     stroke="currentColor"
     strokeWidth="2"
-    strokeLinecap="round"
-    strokeLinejoin="round"
   >
     <circle cx="11" cy="11" r="7" />
     <path d="M21 21l-4.35-4.35" />
@@ -112,44 +100,26 @@ const tabs = [
     sub: "Settings & more",
   },
 ] as const;
+
 type TabId = (typeof tabs)[number]["id"];
 
-/* ═══════════════════════════════════════════════════════════════
-   SPEED & FEEL CONTROLS — tweak these to taste
-   ═══════════════════════════════════════════════════════════════ */
+const ANIM_DURATION = 820,
+  RELEASE_DURATION = 440,
+  CANCEL_DURATION = 360,
+  PEAK_SY = 1.4,
+  NAV_PEAK_SCALE = 1.024,
+  SEARCH_PEAK_SCALE = 1.2,
+  SEARCH_STRETCH_MAX = 1.15;
 
-/** Main pill travel duration in ms — lower = faster  [300–900] */
-const ANIM_DURATION = 820;
-
-/** Duration when releasing from drag/longpress [300–700] */
-const RELEASE_DURATION = 440;
-
-/** Duration when cancelling (snap back) [250–500] */
-const CANCEL_DURATION = 360;
-
-/** Peak vertical scale of pill during animation — 1.0 = no scale, 1.4 = 40% taller */
-const PEAK_SY = 1.4;
-
-/** Nav bar subtle zoom during animation — 1.0 = none, 1.03 = 3% zoom */
-const NAV_PEAK_SCALE = 1.024;
-
-/* ═══════════════════════════════════════════════════════════════
-   SPRING PHYSICS CORE
-   A damped spring solver — gives the authentic iOS "alive" feel.
-   stiffness: how snappy  (higher = faster snap)  [100–600]
-   damping:   how quickly oscillation dies         [10–40]
-   ═══════════════════════════════════════════════════════════════ */
 function springEase(t: number, stiffness = 280, damping = 28): number {
-  // Analytical solution of under-damped spring: x(t) = 1 - e^(-ζωt)(cos(ωdt) + ζ/√(1-ζ²)·sin(ωdt))
-  const omega = Math.sqrt(stiffness);
-  const zeta = damping / (2 * omega);
+  const omega = Math.sqrt(stiffness),
+    zeta = damping / (2 * omega);
   if (zeta >= 1) {
-    // Over-damped — simple smooth exponential
     const r = omega * zeta;
     return 1 - Math.exp(-r * t) * (1 + r * t);
   }
-  const omegaD = omega * Math.sqrt(1 - zeta * zeta);
-  const decay = Math.exp(-zeta * omega * t);
+  const omegaD = omega * Math.sqrt(1 - zeta * zeta),
+    decay = Math.exp(-zeta * omega * t);
   return (
     1 -
     decay *
@@ -158,71 +128,30 @@ function springEase(t: number, stiffness = 280, damping = 28): number {
   );
 }
 
-/** Lead edge uses a snappier spring — arrives fast, slight overshoot */
-function leadSpring(t: number): number {
-  // stiffness=320 damping=26 → quick but slightly springy
-  const raw = springEase(t * 1.15, 320, 26);
-  return Math.min(raw, 1);
-}
-
-/** Trail edge uses a lazier spring — stretches behind, catches up */
-function trailSpring(t: number): number {
-  // stiffness=160 damping=22 → slower, creates the elongation
-  const raw = springEase(t * 1.15, 160, 22);
-  return Math.min(raw, 1);
-}
-
-/** Pill vertical scale — quick inflate, smooth settle  */
-function pillYCurveFresh(t: number): number {
-  // Rise: spring up to PEAK quickly
-  // Fall: smooth exponential decay back to 1
-  if (t < 0.22) {
-    const p = springEase(t / 0.22, 400, 24);
-    return 1 + (PEAK_SY - 1) * p;
-  }
-  // Decay: from PEAK back to 1 using a smooth spring settle
-  const p = springEase((t - 0.22) / 0.78, 120, 18);
-  return PEAK_SY - (PEAK_SY - 1) * p;
-}
-
-/** Release curve: from current drag sy → 1, smooth, no blink */
-function pillYCurveRelease(t: number, startSy: number): number {
-  // Uses a fast spring to settle from startSy to 1
-  const p = springEase(t, 200, 22);
-  const clamped = Math.min(p, 1);
-  return startSy + (1 - startSy) * clamped;
-}
-
-/** Nav bar zoom curve — subtle lift then settle */
-function navScaleCurve(t: number): number {
-  if (t < 0.2) {
-    const p = springEase(t / 0.2, 350, 26);
-    return 1 + (NAV_PEAK_SCALE - 1) * p;
-  }
-  const p = springEase((t - 0.2) / 0.8, 100, 16);
-  return NAV_PEAK_SCALE - (NAV_PEAK_SCALE - 1) * p;
-}
-
-/* ── Helpers ── */
-function overlapToScaleY(r: number): number {
-  if (r <= 0) return 1;
-  if (r < 0.4) {
-    const p = r / 0.4;
-    return 1 - 0.22 * p * p;
-  }
-  if (r < 0.72) {
-    const p = (r - 0.4) / 0.32;
-    return 0.78 + 0.38 * (1 - Math.pow(1 - p, 1.8));
-  }
-  const p = (r - 0.72) / 0.28;
-  return 1.16 - 0.16 * (1 - Math.pow(1 - p, 2));
-}
-const scaleYtoX = (sy: number) => 1 + (1 - sy) * 0.18;
-
-function overlapRatio(pL: number, pW: number, tL: number, tW: number): number {
-  const inter = Math.max(0, Math.min(pL + pW, tL + tW) - Math.max(pL, tL));
-  return Math.min(inter / tW, 1);
-}
+const leadSpring = (t: number) => Math.min(springEase(t * 1.15, 320, 26), 1);
+const trailSpring = (t: number) => Math.min(springEase(t * 1.15, 160, 22), 1);
+const pillYCurveFresh = (t: number) =>
+  t < 0.22
+    ? 1 + (PEAK_SY - 1) * springEase(t / 0.22, 400, 24)
+    : PEAK_SY - (PEAK_SY - 1) * springEase((t - 0.22) / 0.78, 120, 18);
+const pillYCurveRelease = (t: number, startSy: number) =>
+  startSy + (1 - startSy) * Math.min(springEase(t, 200, 22), 1);
+const navScaleCurve = (t: number) =>
+  t < 0.2
+    ? 1 + (NAV_PEAK_SCALE - 1) * springEase(t / 0.2, 350, 26)
+    : NAV_PEAK_SCALE -
+      (NAV_PEAK_SCALE - 1) * springEase((t - 0.2) / 0.8, 100, 16);
+const overlapToScaleY = (r: number) =>
+  r <= 0
+    ? 1
+    : r < 0.4
+      ? 1 - 0.22 * (r / 0.4) ** 2
+      : r < 0.72
+        ? 0.78 + 0.38 * (1 - Math.pow(1 - (r - 0.4) / 0.32, 1.8))
+        : 1.16 - 0.16 * (1 - Math.pow(1 - (r - 0.72) / 0.28, 2));
+const scaleYtoX = (sy: number) => 1 + (sy - 1) * 0.18;
+const overlapRatio = (pL: number, pW: number, tL: number, tW: number) =>
+  Math.min(Math.max(0, Math.min(pL + pW, tL + tW) - Math.max(pL, tL)) / tW, 1);
 
 type IconTf = { sy: number; sx: number };
 const DEFAULT_TF: IconTf = { sy: 1, sx: 1 };
@@ -233,6 +162,11 @@ interface PillState {
   sx: number;
   shimmer: number;
 }
+interface SearchButtonState {
+  scale: number;
+  scaleX: number;
+  scaleY: number;
+}
 interface DragRef {
   startX: number;
   startCX: number;
@@ -242,6 +176,9 @@ interface DragRef {
   nearest: TabId;
   done: boolean;
   timer: ReturnType<typeof setTimeout>;
+  isSearchDrag?: boolean;
+  dragX?: number;
+  dragY?: number;
 }
 
 export default function BottomNav() {
@@ -260,11 +197,18 @@ export default function BottomNav() {
     activity: DEFAULT_TF,
     more: DEFAULT_TF,
   });
+  const [searchBtn, setSearchBtn] = useState<SearchButtonState>({
+    scale: 1,
+    scaleX: 1,
+    scaleY: 1,
+  });
 
   const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const containerRef = useRef<HTMLDivElement>(null);
-  const animRaf = useRef(0);
-  const shimRaf = useRef(0);
+  const searchBtnRef = useRef<HTMLButtonElement>(null);
+  const animRaf = useRef(0),
+    shimRaf = useRef(0),
+    searchAnimRaf = useRef(0);
   const pillRef = useRef<PillState>({
     left: 0,
     width: 0,
@@ -298,7 +242,10 @@ export default function BottomNav() {
     setPill((prev) => ({ ...prev, ...p }));
   }, []);
 
-  /* Shimmer fade */
+  const setSearchBtnDirect = useCallback((s: Partial<SearchButtonState>) => {
+    setSearchBtn((prev) => ({ ...prev, ...s }));
+  }, []);
+
   const animShimmer = useCallback(
     (from: number, to: number, dur: number) => {
       cancelAnimationFrame(shimRaf.current);
@@ -314,10 +261,30 @@ export default function BottomNav() {
     [setPillDirect],
   );
 
-  /* ── Core animation loop ──────────────────────────────────────
-     dur:     total ms  ← controlled by ANIM_DURATION / RELEASE_DURATION
-     startSy: pill's sy at animation start (to avoid snap-blink on release)
-  ────────────────────────────────────────────────────────────── */
+  const animSearchReturn = useCallback(
+    (
+      fromScale: number,
+      fromScaleX: number,
+      fromScaleY: number,
+      dur: number,
+    ) => {
+      cancelAnimationFrame(searchAnimRaf.current);
+      const t0 = performance.now();
+      const tick = (now: number) => {
+        const t = Math.min((now - t0) / dur, 1);
+        const p = Math.min(springEase(t, 240, 24), 1);
+        setSearchBtnDirect({
+          scale: fromScale + (1 - fromScale) * p,
+          scaleX: fromScaleX + (1 - fromScaleX) * p,
+          scaleY: fromScaleY + (1 - fromScaleY) * p,
+        });
+        if (p < 1) searchAnimRaf.current = requestAnimationFrame(tick);
+      };
+      searchAnimRaf.current = requestAnimationFrame(tick);
+    },
+    [],
+  );
+
   const runAnim = useCallback(
     (
       sL: number,
@@ -325,7 +292,7 @@ export default function BottomNav() {
       eL: number,
       eW: number,
       targetId: TabId,
-      dur: number, // ← SPEED CONTROLLER passed in from call-site
+      dur: number,
       startSy = 1,
       onDone?: () => void,
     ) => {
@@ -336,12 +303,8 @@ export default function BottomNav() {
       const t0 = performance.now();
       const isRelease = startSy > 1.05;
       let shimFaded = false;
-
       const tick = (now: number) => {
-        /* ── t is normalised 0→1 over `dur` ms ── */
         const t = Math.min((now - t0) / dur, 1);
-
-        /* ── Pill horizontal position — spring-based lead/trail ── */
         let l: number, w: number;
         if (goRight) {
           const rEdge = sL + sW + (eL + eW - (sL + sW)) * leadSpring(t);
@@ -353,18 +316,12 @@ export default function BottomNav() {
           w = rEdge - l;
         }
         w = Math.max(w, Math.min(sW, eW) * 0.68);
-
-        /* ── Pill vertical scale ── */
         const sy = isRelease
           ? pillYCurveRelease(t, startSy)
           : pillYCurveFresh(t);
         const sx = 1 + (sy - 1) * 0.28;
         setPillDirect({ left: l, width: w, sy, sx });
-
-        /* ── Nav bar zoom ── */
         setNavScale(navScaleCurve(t));
-
-        /* ── Icon squeeze ── */
         const newTf: Record<string, IconTf> = {};
         tabs.forEach((tb) => {
           const r = rects[tb.id];
@@ -386,17 +343,13 @@ export default function BottomNav() {
           }
         });
         setIconTf({ ...newTf });
-
-        /* Shimmer fade-out at 60% progress */
         if (!shimFaded && t >= 0.6) {
           shimFaded = true;
           animShimmer(1, 0, 280);
         }
-
         if (t < 1) {
           animRaf.current = requestAnimationFrame(tick);
         } else {
-          /* Hard-land on exact tab position — pill never rests off-center */
           setPillDirect({ left: eL, width: eW, sy: 1, sx: 1, shimmer: 0 });
           setNavScale(1);
           const final: Record<string, IconTf> = {};
@@ -412,7 +365,6 @@ export default function BottomNav() {
     [allRects, animShimmer, setPillDirect],
   );
 
-  /* Normal tap */
   const goToTab = useCallback(
     (id: TabId) => {
       if (id === activeRef.current) return;
@@ -421,38 +373,27 @@ export default function BottomNav() {
       if (!from || !to) return;
       activeRef.current = id;
       setActive(id);
-      runAnim(
-        from.left,
-        from.width,
-        to.left,
-        to.width,
-        id,
-        ANIM_DURATION, // ← change ANIM_DURATION constant at top to adjust tap speed
-        1,
-      );
+      runAnim(from.left, from.width, to.left, to.width, id, ANIM_DURATION, 1);
     },
     [getRect, runAnim],
   );
 
-  /* Init */
   useEffect(() => {
     const r = getRect("home");
     if (r) setPillDirect({ left: r.left, width: r.width });
   }, [getRect, setPillDirect]);
 
-  /* ── Pointer handlers ── */
   const handlePointerDown = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
       if (e.button > 0) return;
+      if (dragRef.current?.isSearchDrag) return; // BLOCK NAV IF SEARCH DRAGGING
       const nb = containerRef.current!.getBoundingClientRect();
       const x = e.clientX - nb.left;
-
       let tapped: TabId | null = null;
       tabs.forEach(({ id }) => {
         const r = getRect(id);
         if (r && x >= r.left - 4 && x <= r.left + r.width + 4) tapped = id;
       });
-
       const timer = setTimeout(() => {
         const d = dragRef.current;
         if (!d || d.done) return;
@@ -463,7 +404,6 @@ export default function BottomNav() {
           containerRef.current?.setPointerCapture(d.pointerId);
         } catch (_) {}
       }, 200);
-
       dragRef.current = {
         startX: x,
         startCX: e.clientX,
@@ -473,6 +413,7 @@ export default function BottomNav() {
         nearest: tapped ?? activeRef.current,
         done: false,
         timer,
+        isSearchDrag: false,
       };
       e.preventDefault();
     },
@@ -486,7 +427,6 @@ export default function BottomNav() {
       const nb = containerRef.current!.getBoundingClientRect();
       const x = e.clientX - nb.left;
       const dx = x - d.startX;
-
       if (d.mode === "pending" && Math.abs(dx) > 6) {
         clearTimeout(d.timer);
         d.mode = "drag";
@@ -497,10 +437,8 @@ export default function BottomNav() {
         } catch (_) {}
       }
       if (d.mode !== "drag" && d.mode !== "longpress") return;
-
       cancelAnimationFrame(animRaf.current);
       cancelAnimationFrame(shimRaf.current);
-
       let nearest: TabId = d.nearest,
         nearestDist = Infinity;
       tabs.forEach(({ id }) => {
@@ -513,7 +451,6 @@ export default function BottomNav() {
         }
       });
       d.nearest = nearest;
-
       const tr = getRect(nearest);
       if (!tr) return;
       const maxL = nb.width - 12 - tr.width;
@@ -526,7 +463,6 @@ export default function BottomNav() {
         shimmer: 0.22,
       });
       setNavScale(NAV_PEAK_SCALE);
-
       const newTf: Record<string, IconTf> = {};
       tabs.forEach(({ id }) => {
         newTf[id] = DEFAULT_TF;
@@ -545,7 +481,6 @@ export default function BottomNav() {
       d.done = true;
       dragRef.current = null;
       const dx = e.clientX - d.startCX;
-
       if (d.mode === "drag" || d.mode === "longpress") {
         const { left: sL, width: sW, sy: curSy } = pillRef.current;
         const to = getRect(d.nearest);
@@ -556,15 +491,7 @@ export default function BottomNav() {
         }
         activeRef.current = d.nearest;
         setActive(d.nearest);
-        runAnim(
-          sL,
-          sW,
-          to.left,
-          to.width,
-          d.nearest,
-          RELEASE_DURATION, // ← change RELEASE_DURATION constant at top to adjust release speed
-          curSy,
-        );
+        runAnim(sL, sW, to.left, to.width, d.nearest, RELEASE_DURATION, curSy);
       } else if (Math.abs(dx) < 8 && d.tapped) {
         goToTab(d.tapped);
       } else {
@@ -591,7 +518,7 @@ export default function BottomNav() {
         to.left,
         to.width,
         activeRef.current,
-        CANCEL_DURATION, // ← change CANCEL_DURATION constant at top to adjust cancel snap speed
+        CANCEL_DURATION,
         curSy,
       );
     else {
@@ -600,15 +527,129 @@ export default function BottomNav() {
     }
   }, [getRect, setPillDirect, runAnim]);
 
-  useEffect(
-    () => () => {
-      cancelAnimationFrame(animRaf.current);
-      cancelAnimationFrame(shimRaf.current);
+  const handleSearchPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLButtonElement>) => {
+      if (e.button > 0) return;
+      const timer = setTimeout(() => {
+        const d = dragRef.current;
+        if (!d || d.done) return;
+        d.mode = "longpress";
+        d.isSearchDrag = true;
+        setSearchBtnDirect({ scale: SEARCH_PEAK_SCALE });
+        try {
+          searchBtnRef.current?.setPointerCapture(e.pointerId);
+        } catch (_) {}
+      }, 200);
+      dragRef.current = {
+        startX: e.clientX,
+        startCX: e.clientX,
+        pointerId: e.pointerId,
+        tapped: null,
+        mode: "pending",
+        nearest: "home",
+        done: false,
+        timer,
+        dragX: 0,
+        dragY: 0,
+        isSearchDrag: false,
+      };
+      e.preventDefault();
     },
     [],
   );
 
-  /* Pill render styles */
+  const handleSearchPointerMove = useCallback(
+    (e: React.PointerEvent<HTMLButtonElement>) => {
+      const d = dragRef.current;
+      if (!d || d.done) return;
+      const dx = e.clientX - d.startCX;
+      const dy = e.clientY - d.startCX;
+      if (d.mode === "pending" && (Math.abs(dx) > 6 || Math.abs(dy) > 6)) {
+        clearTimeout(d.timer);
+        d.mode = "drag";
+        d.isSearchDrag = true;
+        setSearchBtnDirect({ scale: SEARCH_PEAK_SCALE });
+        try {
+          searchBtnRef.current?.setPointerCapture(e.pointerId);
+        } catch (_) {}
+      }
+      if (d.mode !== "drag" && d.mode !== "longpress") return;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      const maxStretch = 120;
+      const stretchRatio = Math.min(distance / maxStretch, SEARCH_STRETCH_MAX);
+      const absDx = Math.abs(dx);
+      const absDy = Math.abs(dy);
+      const isHorizontal = absDx > absDy;
+      let scaleX = 1,
+        scaleY = 1;
+      const stretchAmount = (stretchRatio - 1) * 0.3;
+      if (isHorizontal) {
+        scaleX = 1 + stretchAmount;
+        scaleY = 1 - stretchAmount * 0.08;
+      } else {
+        scaleY = 1 + stretchAmount;
+        scaleX = 1 - stretchAmount * 0.08;
+      }
+      setSearchBtnDirect({ scale: SEARCH_PEAK_SCALE, scaleX, scaleY });
+      d.dragX = dx;
+      d.dragY = dy;
+    },
+    [],
+  );
+
+  const handleSearchPointerUp = useCallback(
+    (e: React.PointerEvent<HTMLButtonElement>) => {
+      const d = dragRef.current;
+      if (!d) return;
+      clearTimeout(d.timer);
+      const dx = e.clientX - d.startCX;
+      const isClick = Math.abs(dx) < 8 && d.mode === "pending";
+      if (isClick) {
+        setSearchBtnDirect({ scale: 0.9 });
+        setTimeout(() => {
+          setSearchBtnDirect({ scale: 1, scaleX: 1, scaleY: 1 });
+        }, 120);
+      } else if (d.mode === "drag" || d.mode === "longpress") {
+        const currentState = searchBtn;
+        animSearchReturn(
+          currentState.scale,
+          currentState.scaleX,
+          currentState.scaleY,
+          RELEASE_DURATION,
+        );
+      } else {
+        setSearchBtnDirect({ scale: 1, scaleX: 1, scaleY: 1 });
+      }
+      d.done = true;
+      dragRef.current = null;
+    },
+    [animSearchReturn, searchBtn],
+  );
+
+  const handleSearchPointerCancel = useCallback(() => {
+    const d = dragRef.current;
+    if (!d) return;
+    clearTimeout(d.timer);
+    d.done = true;
+    const currentState = searchBtn;
+    animSearchReturn(
+      currentState.scale,
+      currentState.scaleX,
+      currentState.scaleY,
+      CANCEL_DURATION,
+    );
+    dragRef.current = null;
+  }, [searchBtn, animSearchReturn]);
+
+  useEffect(
+    () => () => {
+      cancelAnimationFrame(animRaf.current);
+      cancelAnimationFrame(shimRaf.current);
+      cancelAnimationFrame(searchAnimRaf.current);
+    },
+    [],
+  );
+
   const s = pill.shimmer;
   const pillBg = `rgba(255,255,255,${0.07 + s * 0.04})`;
   const pillShadow = [
@@ -639,7 +680,6 @@ export default function BottomNav() {
         overflow: "hidden",
       }}
     >
-      {/* Bokeh */}
       <div
         style={{
           position: "absolute",
@@ -732,7 +772,6 @@ export default function BottomNav() {
         tap · drag · long-press &amp; drag
       </p>
 
-      {/* Page content */}
       <div
         style={{
           flex: 1,
@@ -797,7 +836,6 @@ export default function BottomNav() {
         ))}
       </div>
 
-      {/* Nav row */}
       <div
         style={{
           position: "relative",
@@ -833,8 +871,7 @@ export default function BottomNav() {
             overflow: "visible",
             WebkitTapHighlightColor: "transparent",
             outline: "none",
-            // pill can burst outside
-            transform: `scale(${navScale})`, // subtle whole-nav zoom
+            transform: `scale(${navScale})`,
             transformOrigin: "center bottom",
             willChange: "transform",
           }}
@@ -843,7 +880,6 @@ export default function BottomNav() {
           onPointerUp={handlePointerUp}
           onPointerCancel={handlePointerCancel}
         >
-          {/* ── Sliding pill ── */}
           <div
             style={{
               position: "absolute",
@@ -894,10 +930,9 @@ export default function BottomNav() {
               }}
             />
           </div>
-          {/* Tab buttons */}
           {tabs.map((tab) => {
             const isActive = active === tab.id;
-            const tf = iconTf[tab.id] ?? DEFAULT_TF;
+            const tf = DEFAULT_TF;
             return (
               <button
                 key={tab.id}
@@ -963,43 +998,39 @@ export default function BottomNav() {
           })}
         </div>
 
-        {/* Search button */}
         <button
-          style={
-            {
-              width: 52,
-              height: 52,
-              borderRadius: "50%",
-              background: "rgba(255,255,255,.10)",
-              backdropFilter: "blur(40px) saturate(180%)",
-              WebkitBackdropFilter: "blur(40px) saturate(180%)",
-              boxShadow: [
-                "inset 0 1px 0 rgba(255,255,255,.30)",
-                "inset 0 -1px 0 rgba(255,255,255,.04)",
-                "0 20px 60px rgba(0,0,0,.40)",
-                "0 4px 16px rgba(0,0,0,.28)",
-              ].join(","),
-              border: ".5px solid rgba(255,255,255,.14)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              cursor: "pointer",
-              color: "rgba(255,255,255,.55)",
-              WebkitTapHighlightColor: "transparent",
-              outline: "none",
-              flexShrink: 0,
-              transition: "transform .18s ease",
-            } as React.CSSProperties
-          }
-          onPointerDown={(e) => {
-            (e.currentTarget as HTMLElement).style.transform = "scale(0.90)";
+          ref={searchBtnRef}
+          style={{
+            width: 52,
+            height: 52,
+            borderRadius: "50%",
+            background: "rgba(255,255,255,.10)",
+            backdropFilter: "blur(40px) saturate(180%)",
+            WebkitBackdropFilter: "blur(40px) saturate(180%)",
+            boxShadow: [
+              "inset 0 1px 0 rgba(255,255,255,.30)",
+              "inset 0 -1px 0 rgba(255,255,255,.04)",
+              "0 20px 60px rgba(0,0,0,.40)",
+              "0 4px 16px rgba(0,0,0,.28)",
+            ].join(","),
+            border: ".5px solid rgba(255,255,255,.14)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            cursor: "pointer",
+            color: "rgba(255,255,255,.55)",
+            WebkitTapHighlightColor: "transparent",
+            outline: "none",
+            flexShrink: 0,
+            transform: `scale(${searchBtn.scale}) scaleX(${searchBtn.scaleX}) scaleY(${searchBtn.scaleY})`,
+            transformOrigin: "center center",
+            willChange: "transform",
+            touchAction: "none",
           }}
-          onPointerUp={(e) => {
-            (e.currentTarget as HTMLElement).style.transform = "scale(1)";
-          }}
-          onPointerLeave={(e) => {
-            (e.currentTarget as HTMLElement).style.transform = "scale(1)";
-          }}
+          onPointerDown={handleSearchPointerDown}
+          onPointerMove={handleSearchPointerMove}
+          onPointerUp={handleSearchPointerUp}
+          onPointerCancel={handleSearchPointerCancel}
         >
           <SearchIcon />
         </button>

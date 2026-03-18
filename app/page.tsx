@@ -16,7 +16,7 @@ const tabs = [
 
 type TabId = (typeof tabs)[number]["id"];
 
-const ANIM_DURATION = 820, RELEASE_DURATION = 440, CANCEL_DURATION = 360, PEAK_SY = 1.4, NAV_PEAK_SCALE = 1.024, SEARCH_PEAK_SCALE = 1.2, SEARCH_STRETCH_MAX = 1.15;
+const ANIM_DURATION = 820, RELEASE_DURATION = 440, CANCEL_DURATION = 360, PEAK_SY = 1.4, NAV_PEAK_SCALE = 1.024, SEARCH_PEAK_SCALE = 1.2, SEARCH_STRETCH_MAX = 1.05;
 
 function springEase(t: number, stiffness = 280, damping = 28): number {
   const omega = Math.sqrt(stiffness), zeta = damping / (2 * omega);
@@ -306,26 +306,27 @@ export default function BottomNav() {
     const moveY = dy * 0.05;
     
     const distance = Math.sqrt(dx * dx + dy * dy);
-    const maxStretch = 100; // More sensitive
-    const stretchRatio = Math.min(distance / maxStretch, SEARCH_STRETCH_MAX);
+    const maxStretch = 100; // Balanced sensitivity
+    const stretchRatio = Math.min(distance / maxStretch, 1.5); // Max 1.5x stretch
+    
     const absDx = Math.abs(dx);
     const absDy = Math.abs(dy);
     
     let scaleX = 1, scaleY = 1, skewX = 0, skewY = 0;
-    const stretchAmount = (stretchRatio - 1) * 0.5; // INCREASED stretch visibility
+    
+    // Visible rubber band stretch
+    const stretchAmount = (stretchRatio - 1) * 0.7; // 0 to 0.35 - more visible!
     
     if (absDy > absDx) {
-      // VERTICAL drag - more stretch
-      scaleY = 1 + stretchAmount * 0.8; // Vertical expansion
-      scaleX = 1 - stretchAmount * 0.2; // Horizontal compression
-      // Skew to deform top/bottom
-      skewY = dy > 0 ? stretchAmount * 6 : -stretchAmount * 6;
+      // VERTICAL drag - visible stretch
+      scaleY = 1 + stretchAmount * 1.2; // More vertical expansion
+      scaleX = 1 - stretchAmount * 0.25; // More pinch
+      skewY = dy > 0 ? stretchAmount * 8 : -stretchAmount * 8; // More skew
     } else {
-      // HORIZONTAL drag - more stretch
-      scaleX = 1 + stretchAmount * 0.8; // Horizontal expansion
-      scaleY = 1 - stretchAmount * 0.2; // Vertical compression
-      // Skew to deform left/right
-      skewX = dx > 0 ? stretchAmount * 6 : -stretchAmount * 6;
+      // HORIZONTAL drag - visible stretch
+      scaleX = 1 + stretchAmount * 1.2; // More horizontal expansion
+      scaleY = 1 - stretchAmount * 0.25; // More pinch
+      skewX = dx > 0 ? stretchAmount * 8 : -stretchAmount * 8; // More skew
     }
     
     setSearchBtnDirect({ scale: SEARCH_PEAK_SCALE, scaleX, scaleY, translateX: moveX, translateY: moveY, skewX, skewY });

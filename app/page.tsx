@@ -16,7 +16,7 @@ const tabs = [
 
 type TabId = (typeof tabs)[number]["id"];
 
-const ANIM_DURATION = 820, RELEASE_DURATION = 440, CANCEL_DURATION = 360, PEAK_SY = 1.4, NAV_PEAK_SCALE = 1.024, SEARCH_PEAK_SCALE = 1.2, SEARCH_STRETCH_MAX = 1.15;
+const ANIM_DURATION = 820, RELEASE_DURATION = 440, CANCEL_DURATION = 360, PEAK_SY = 1.4, NAV_PEAK_SCALE = 1.024, SEARCH_PEAK_SCALE = 1.2, SEARCH_STRETCH_MAX = 1.3;
 
 function springEase(t: number, stiffness = 280, damping = 28): number {
   const omega = Math.sqrt(stiffness), zeta = damping / (2 * omega);

@@ -54,7 +54,6 @@ export default function BottomNav() {
   const pillRef = useRef<PillState>({ left: 0, width: 0, sy: 1, sx: 1, shimmer: 0 });
   const activeRef = useRef<TabId>("home");
   const dragRef = useRef<DragRef | null>(null);
-  // Track current search btn state for animation start values
   const searchBtnRef2 = useRef<SearchButtonState>({ scaleX: 1, scaleY: 1, translateX: 0, translateY: 0 });
 
   const getRect = useCallback((id: string) => {
@@ -269,7 +268,7 @@ export default function BottomNav() {
     else { setPillDirect({ sy: 1, sx: 1 }); setNavScale(1); }
   }, [getRect, setPillDirect, runAnim]);
 
-  // ─── Search button handlers (FIXED: clean oval stretch along drag axis) ───
+  // ─── Search button handlers ───
 
   const handleSearchPointerDown = useCallback((e: React.PointerEvent<HTMLButtonElement>) => {
     if (e.button > 0) return;
@@ -279,6 +278,8 @@ export default function BottomNav() {
       if (!d || d.done) return;
       d.mode = "longpress";
       d.isSearchDrag = true;
+      // Long press: uniform scale up (restored from original)
+      setSearchBtnDirect({ scaleX: SEARCH_PEAK_SCALE, scaleY: SEARCH_PEAK_SCALE, translateX: 0, translateY: 0 });
       try { searchBtnRef.current?.setPointerCapture(e.pointerId); } catch (_) {}
     }, 200);
     dragRef.current = {
@@ -289,7 +290,7 @@ export default function BottomNav() {
       done: false, timer, isSearchDrag: false,
     };
     e.preventDefault();
-  }, []);
+  }, [setSearchBtnDirect]);
 
   const handleSearchPointerMove = useCallback((e: React.PointerEvent<HTMLButtonElement>) => {
     const d = dragRef.current;
@@ -310,11 +311,10 @@ export default function BottomNav() {
     const tx = dx * 0.04;
     const ty = dy * 0.04;
 
-    // Oval stretch: elongate along dominant drag axis, compress the other
-    const maxDist = 120;
-    const stretchFactor = Math.min(dist / maxDist, 1);
-  const longAxis = 1 + 0.28 * stretchFactor;   // max ~1.28x — subtle elongation
-const shortAxis = 1 - 0.10 * stretchFactor;  // max ~0.90x — gentle compression
+    // Subtle oval stretch along dominant drag axis
+    const stretchFactor = Math.min(dist / 120, 1);
+    const longAxis = 1 + 0.28 * stretchFactor;
+    const shortAxis = 1 - 0.10 * stretchFactor;
 
     const absDx = Math.abs(dx);
     const absDy = Math.abs(dy);
@@ -335,11 +335,11 @@ const shortAxis = 1 - 0.10 * stretchFactor;  // max ~0.90x — gentle compressio
     dragRef.current = null;
 
     if (isClick) {
-      // Tap: quick bounce scale then return
+      // Tap: quick uniform bounce then spring back (restored from original)
       setSearchBtnDirect({ scaleX: SEARCH_PEAK_SCALE, scaleY: SEARCH_PEAK_SCALE, translateX: 0, translateY: 0 });
       setTimeout(() => {
         animSearchReturn({ scaleX: SEARCH_PEAK_SCALE, scaleY: SEARCH_PEAK_SCALE, translateX: 0, translateY: 0 }, 220);
-      }, 0);
+      }, 60);
     } else if (d.mode === "drag" || d.mode === "longpress") {
       animSearchReturn({ ...searchBtnRef2.current }, RELEASE_DURATION);
     } else {
@@ -373,7 +373,6 @@ const shortAxis = 1 - 0.10 * stretchFactor;  // max ~0.90x — gentle compressio
     `0 2px 8px rgba(0,0,0,0.28)`,
   ].join(",");
 
-  // Search button transform — pure scaleX/scaleY for clean oval, no skew
   const searchTransform = `translate(${searchBtn.translateX}px, ${searchBtn.translateY}px) scaleX(${searchBtn.scaleX}) scaleY(${searchBtn.scaleY})`;
 
   return (
@@ -445,7 +444,6 @@ const shortAxis = 1 - 0.10 * stretchFactor;  // max ~0.90x — gentle compressio
             cursor: "pointer", color: "rgba(255,255,255,.55)",
             WebkitTapHighlightColor: "transparent", outline: "none",
             flexShrink: 0,
-            // Clean oval: only translate + scaleX/scaleY, no skew
             transform: searchTransform,
             transformOrigin: "center center",
             willChange: "transform",

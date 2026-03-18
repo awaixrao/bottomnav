@@ -16,7 +16,7 @@ const tabs = [
 
 type TabId = (typeof tabs)[number]["id"];
 
-const ANIM_DURATION = 820, RELEASE_DURATION = 440, CANCEL_DURATION = 360, PEAK_SY = 1.4, NAV_PEAK_SCALE = 1.024, SEARCH_PEAK_SCALE = 1.2, SEARCH_STRETCH_MAX = 1.15;
+const ANIM_DURATION = 820, RELEASE_DURATION = 440, CANCEL_DURATION = 360, PEAK_SY = 1.4, NAV_PEAK_SCALE = 1.024, SEARCH_PEAK_SCALE = 1.2, SEARCH_STRETCH_MAX = 1.3;
 
 function springEase(t: number, stiffness = 280, damping = 28): number {
   const omega = Math.sqrt(stiffness), zeta = damping / (2 * omega);
@@ -185,7 +185,7 @@ export default function BottomNav() {
 
   const handlePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button > 0) return;
-    if (dragRef.current?.isSearchDrag) return;
+    if (dragRef.current?.isSearchDrag) return; // BLOCK NAV IF SEARCH DRAGGING
     const nb = containerRef.current!.getBoundingClientRect();
     const x = e.clientX - nb.left;
     let tapped: TabId | null = null;
@@ -275,7 +275,15 @@ export default function BottomNav() {
 
   const handleSearchPointerDown = useCallback((e: React.PointerEvent<HTMLButtonElement>) => {
     if (e.button > 0) return;
-    dragRef.current = { startX: e.clientX, startCX: e.clientX, pointerId: e.pointerId, tapped: null, mode: "pending", nearest: "home", done: false, timer: setTimeout(() => {}, 0), dragX: 0, dragY: 0, isSearchDrag: false };
+    const timer = setTimeout(() => {
+      const d = dragRef.current;
+      if (!d || d.done) return;
+      d.mode = "longpress";
+      d.isSearchDrag = true;
+      setSearchBtnDirect({ scale: SEARCH_PEAK_SCALE });
+      try { searchBtnRef.current?.setPointerCapture(e.pointerId); } catch (_) {}
+    }, 200);
+    dragRef.current = { startX: e.clientX, startCX: e.clientX, pointerId: e.pointerId, tapped: null, mode: "pending", nearest: "home", done: false, timer, dragX: 0, dragY: 0, isSearchDrag: false };
     e.preventDefault();
   }, []);
 
@@ -284,7 +292,7 @@ export default function BottomNav() {
     if (!d || d.done) return;
     const dx = e.clientX - d.startCX;
     const dy = e.clientY - d.startCX;
-    if (d.mode === "pending" && (Math.abs(dx) > 3 || Math.abs(dy) > 3)) { // Reduced threshold from 6 to 3
+    if (d.mode === "pending" && (Math.abs(dx) > 6 || Math.abs(dy) > 6)) {
       clearTimeout(d.timer);
       d.mode = "drag";
       d.isSearchDrag = true;
@@ -293,26 +301,30 @@ export default function BottomNav() {
     }
     if (d.mode !== "drag" && d.mode !== "longpress") return;
     
+    // Minimal drag movement
     const moveX = dx * 0.05;
     const moveY = dy * 0.05;
     
     const distance = Math.sqrt(dx * dx + dy * dy);
-    const maxStretch = 100;
+    const maxStretch = 100; // More sensitive
     const stretchRatio = Math.min(distance / maxStretch, SEARCH_STRETCH_MAX);
-    
     const absDx = Math.abs(dx);
     const absDy = Math.abs(dy);
     
     let scaleX = 1, scaleY = 1, skewX = 0, skewY = 0;
-    const stretchAmount = (stretchRatio - 1) * 0.5;
+    const stretchAmount = (stretchRatio - 1) * 0.5; // INCREASED stretch visibility
     
     if (absDy > absDx) {
-      scaleY = 1 + stretchAmount * 0.8;
-      scaleX = 1 - stretchAmount * 0.2;
+      // VERTICAL drag - more stretch
+      scaleY = 1 + stretchAmount * 0.8; // Vertical expansion
+      scaleX = 1 - stretchAmount * 0.2; // Horizontal compression
+      // Skew to deform top/bottom
       skewY = dy > 0 ? stretchAmount * 6 : -stretchAmount * 6;
     } else {
-      scaleX = 1 + stretchAmount * 0.8;
-      scaleY = 1 - stretchAmount * 0.2;
+      // HORIZONTAL drag - more stretch
+      scaleX = 1 + stretchAmount * 0.8; // Horizontal expansion
+      scaleY = 1 - stretchAmount * 0.2; // Vertical compression
+      // Skew to deform left/right
       skewX = dx > 0 ? stretchAmount * 6 : -stretchAmount * 6;
     }
     
@@ -328,9 +340,8 @@ export default function BottomNav() {
     const dx = e.clientX - d.startCX;
     const isClick = Math.abs(dx) < 8 && d.mode === "pending";
     if (isClick) {
-      // Scale up like long-press, not shrink
-      setSearchBtnDirect({ scale: SEARCH_PEAK_SCALE });
-      setTimeout(() => { setSearchBtnDirect({ scale: 1, scaleX: 1, scaleY: 1, translateX: 0, translateY: 0, skewX: 0, skewY: 0 }); }, 200);
+      setSearchBtnDirect({ scale: 1.2 });
+      setTimeout(() => { setSearchBtnDirect({ scale: 1, scaleX: 1, scaleY: 1, translateX: 0, translateY: 0, skewX: 0, skewY: 0 }); }, 220);
     } else if (d.mode === "drag" || d.mode === "longpress") {
       const currentState = searchBtn;
       animSearchReturn(currentState.scale, currentState.scaleX, currentState.scaleY, RELEASE_DURATION);

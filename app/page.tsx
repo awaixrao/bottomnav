@@ -16,7 +16,7 @@ const tabs = [
 
 type TabId = (typeof tabs)[number]["id"];
 
-const ANIM_DURATION = 820, RELEASE_DURATION = 440, CANCEL_DURATION = 360, PEAK_SY = 1.4, NAV_PEAK_SCALE = 1.024, SEARCH_PEAK_SCALE = 1.2;
+const ANIM_DURATION = 820, RELEASE_DURATION = 440, CANCEL_DURATION = 360, PEAK_SY = 1.4, NAV_PEAK_SCALE = 1.024, SEARCH_PEAK_SCALE = 1.1;
 
 function springEase(t: number, stiffness = 280, damping = 28): number {
   const omega = Math.sqrt(stiffness), zeta = damping / (2 * omega);
@@ -292,37 +292,35 @@ export default function BottomNav() {
     e.preventDefault();
   }, [setSearchBtnDirect]);
 
-  const handleSearchPointerMove = useCallback((e: React.PointerEvent<HTMLButtonElement>) => {
-    const d = dragRef.current;
-    if (!d || d.done) return;
-    const dx = e.clientX - d.startCX;
-    const dy = e.clientY - d.startCY;
-    const dist = Math.sqrt(dx * dx + dy * dy);
+const handleSearchPointerMove = useCallback((e: React.PointerEvent<HTMLButtonElement>) => {
+  const d = dragRef.current;
+  if (!d || d.done) return;
+  const dx = e.clientX - d.startCX;
+  const dy = e.clientY - d.startCY;
+  const dist = Math.sqrt(dx * dx + dy * dy);
 
-    if (d.mode === "pending" && dist > 6) {
-      clearTimeout(d.timer);
-      d.mode = "drag";
-      d.isSearchDrag = true;
-      try { searchBtnRef.current?.setPointerCapture(d.pointerId); } catch (_) {}
-    }
-    if (d.mode !== "drag" && d.mode !== "longpress") return;
+  if (d.mode === "pending" && dist > 6) {
+    clearTimeout(d.timer);
+    d.mode = "drag";
+    d.isSearchDrag = true;
+    try { searchBtnRef.current?.setPointerCapture(d.pointerId); } catch (_) {}
+  }
+  if (d.mode !== "drag" && d.mode !== "longpress") return;
 
-    // Subtle follow movement
-    const tx = dx * 0.04;
-    const ty = dy * 0.04;
+  const tx = dx * 0.04;
+  const ty = dy * 0.04;
 
-    // Subtle oval stretch along dominant drag axis
-    const stretchFactor = Math.min(dist / 120, 1);
-    const longAxis = 1 + 0.28 * stretchFactor;
-    const shortAxis = 1 - 0.10 * stretchFactor;
+  const stretchFactor = Math.min(dist / 120, 1);
+  const longAxis = SEARCH_PEAK_SCALE + 0.28 * stretchFactor;  // peak scale + stretch
+  const shortAxis = SEARCH_PEAK_SCALE - 0.10 * stretchFactor; // peak scale - compress
 
-    const absDx = Math.abs(dx);
-    const absDy = Math.abs(dy);
-    const scaleX = absDx >= absDy ? longAxis : shortAxis;
-    const scaleY = absDy > absDx ? longAxis : shortAxis;
+  const absDx = Math.abs(dx);
+  const absDy = Math.abs(dy);
+  const scaleX = absDx >= absDy ? longAxis : shortAxis;
+  const scaleY = absDy > absDx ? longAxis : shortAxis;
 
-    setSearchBtnDirect({ scaleX, scaleY, translateX: tx, translateY: ty });
-  }, [setSearchBtnDirect]);
+  setSearchBtnDirect({ scaleX, scaleY, translateX: tx, translateY: ty });
+}, [setSearchBtnDirect]);
 
   const handleSearchPointerUp = useCallback((e: React.PointerEvent<HTMLButtonElement>) => {
     const d = dragRef.current;
@@ -339,7 +337,7 @@ export default function BottomNav() {
       setSearchBtnDirect({ scaleX: SEARCH_PEAK_SCALE, scaleY: SEARCH_PEAK_SCALE, translateX: 0, translateY: 0 });
       setTimeout(() => {
         animSearchReturn({ scaleX: SEARCH_PEAK_SCALE, scaleY: SEARCH_PEAK_SCALE, translateX: 0, translateY: 0 }, 220);
-      }, 60);
+      }, 220);
     } else if (d.mode === "drag" || d.mode === "longpress") {
       animSearchReturn({ ...searchBtnRef2.current }, RELEASE_DURATION);
     } else {

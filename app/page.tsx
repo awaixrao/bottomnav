@@ -307,15 +307,19 @@ const handleSearchPointerMove = useCallback((e: React.PointerEvent<HTMLButtonEle
   }
   if (d.mode !== "drag" && d.mode !== "longpress") return;
 
-  const tx = dx * 0.04;
-  const ty = dy * 0.04;
-
-  const stretchFactor = Math.min(dist / 120, 1);
-  const longAxis = SEARCH_PEAK_SCALE + 0.28 * stretchFactor;  // peak scale + stretch
-  const shortAxis = SEARCH_PEAK_SCALE - 0.10 * stretchFactor; // peak scale - compress
-
   const absDx = Math.abs(dx);
   const absDy = Math.abs(dy);
+  const axisBias = absDx / (absDx + absDy + 0.001);
+
+  // Clamp translation so button never goes off screen
+  const maxTranslate = 12;
+  const tx = Math.max(-maxTranslate, Math.min(maxTranslate, dx * 0.04));
+  const ty = Math.max(-maxTranslate, Math.min(maxTranslate, dy * 0.04 * (1 - axisBias)));
+
+  const stretchFactor = Math.min(dist / 120, 1);
+  const longAxis = SEARCH_PEAK_SCALE + 0.28 * stretchFactor;
+  const shortAxis = SEARCH_PEAK_SCALE - 0.10 * stretchFactor;
+
   const scaleX = absDx >= absDy ? longAxis : shortAxis;
   const scaleY = absDy > absDx ? longAxis : shortAxis;
 
@@ -395,8 +399,7 @@ const handleSearchPointerMove = useCallback((e: React.PointerEvent<HTMLButtonEle
         ))}
       </div>
 
-      <div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", gap: 10, padding: "0 6px" }}>
-        <div
+<div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", gap: 10, padding: "0 6px", overflow: "visible" }}>        <div
           ref={containerRef}
           style={{ position: "relative", display: "flex", alignItems: "center", background: "rgba(255,255,255,.10)", backdropFilter: "blur(40px) saturate(180%)", WebkitBackdropFilter: "blur(40px) saturate(180%)", borderRadius: 100, padding: "5px 6px", boxShadow: ["inset 0 1px 0 rgba(255,255,255,.30)", "inset 0 -1px 0 rgba(255,255,255,.04)", "inset 1px 0 0 rgba(255,255,255,.08)", "inset -1px 0 0 rgba(255,255,255,.06)", "0 20px 60px rgba(0,0,0,.45)", "0 4px 16px rgba(0,0,0,.30)"].join(","), border: ".5px solid rgba(255,255,255,.14)", touchAction: "none", cursor: "pointer", overflow: "visible", WebkitTapHighlightColor: "transparent", outline: "none", transform: `scale(${navScale})`, transformOrigin: "center bottom", willChange: "transform" }}
           onPointerDown={handlePointerDown}
